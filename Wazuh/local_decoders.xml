@@ -25,6 +25,15 @@
     <program_name>local_decoder_example</program_name>
 </decoder>
 
+<decoder name="yara">
+  <program_name>^YARA</program_name>
+</decoder>
+
+<decoder name="yara-scan">
+  <parent>yara</parent>
+  <regex>YARA: (\w+) - Scan result: (.*) \| chatgpt_response: (.*)</regex>
+  <order>log_type,scan_result,ai_response</order>
+</decoder>
 <!--
 <decoder name="yara_decoder">
     <prematch>wazuh-yara:</prematch>
@@ -59,12 +68,12 @@
 -->
 
 <decoder name="YARA_decoder">
-  <prematch>wazuh-YARA:</prematch>
+  <prematch>YARA:</prematch>
 </decoder>
 
 <decoder name="YARA_child">
   <parent>YARA_decoder</parent>
-  <regex type="pcre2">wazuh-YARA: (\S+)</regex>
+  <regex type="pcre2">YARA: (\S+)</regex>
   <order>YARA.log_type</order>
 </decoder>
 
@@ -82,7 +91,7 @@
 
 <decoder name="YARA_child">
   <parent>YARA_decoder</parent>
-  <regex type="pcre2">author="([^"]+)",</regex>
+  <regex type="pcre2">author=CyberSentinel,</regex>
   <order>YARA.rule_author</order>
 </decoder>
 
@@ -136,8 +145,8 @@
 
 <decoder name="YARA_child">
   <parent>YARA_decoder</parent>
-  <regex type="pcre2">chatgpt_response: (.*)</regex>
-  <order>YARA.chatgpt_response</order>
+  <regex type="pcre2">AI_response: (.*)</regex>
+  <order>YARA.AI_response</order>
 </decoder>
 
 <decoder name="YARA_child">
