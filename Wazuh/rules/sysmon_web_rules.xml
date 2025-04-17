@@ -1,0 +1,20 @@
+<group name="windows,sysmon,web,">
+  <!-- Detect network connections to suspicious domains -->
+  <rule id="100305" level="3">
+    <field name="win.eventdata.destinationHostname">\.com|\.org|\.net</field>
+    <description>Sysmon: Web connection detected</description>
+  </rule>
+
+  <!-- Alert on suspicious domains -->
+  <rule id="100306" level="8">
+    <if_sid>100305</if_sid>
+    <field name="win.eventdata.destinationHostname">malicious\.com|evil\.org|badsite\.net</field>
+    <description>Sysmon: Connection to suspicious website</description>
+  </rule>
+
+  <!-- Monitor specific browsers -->
+  <rule id="100307" level="3">
+    <field name="win.eventdata.image">chrome\.exe|msedge\.exe|firefox\.exe</field>
+    <description>Sysmon: Browser process activity</description>
+  </rule>
+</group>
