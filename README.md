@@ -10,7 +10,7 @@
    - /etc/wazuh-indexer/
       - [opensearch.yml](https://github.com/effaaykhan/SOC-Files/blob/main/Wazuh/opensearch.yml)
    - /var/ossec/etc/decoders/
-      - [local_decoders.xml](https://github.com/effaaykhan/SOC-Files/blob/main/Wazuh/decoders)
+      - [Decoders](https://github.com/effaaykhan/SOC-Files/blob/main/Wazuh/decoders)
 
   ## Fluent-Bit
    - [fluent-bit.conf](https://github.com/effaaykhan/SOC-Files/blob/main/Fluent-Bit/fluent-bit.conf)
