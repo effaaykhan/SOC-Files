@@ -65,49 +65,79 @@ if (Test-Path $configPath) {
 try {
     [xml]$xml = Get-Content $tempConfig
 
-    # 4a: Set <address> under <server> to the Wazuh manager IP
-    $xml.ossec_config.server.address = $wazuhManager
+    # Ensure root exists
+    if (-not $xml.ossec_config) {
+        throw "ossec_config root element not found in configuration."
+    }
 
-    # 4b: Set <agent_name> under <enrollment> to this machine's hostname
+    # --- Server section ---
+    $server = $xml.ossec_config.server
+    if (-not $server) {
+        $server = $xml.CreateElement("server")
+        $xml.ossec_config.AppendChild($server) | Out-Null
+    }
+    $address = $server.address
+    if (-not $address) {
+        $address = $xml.CreateElement("address")
+        $server.AppendChild($address) | Out-Null
+    }
+    $address.InnerText = $wazuhManager
+
+    # --- Enrollment section ---
+    $enrollment = $xml.ossec_config.enrollment
+    if (-not $enrollment) {
+        $enrollment = $xml.CreateElement("enrollment")
+        $xml.ossec_config.AppendChild($enrollment) | Out-Null
+    }
+
     $agentName = $env:COMPUTERNAME
-    $xml.ossec_config.enrollment.agent_name = $agentName
 
-    # 4c: Set <groups> under <enrollment> to the Windows major version (e.g. "windows10")
+    $agentNode = $enrollment.agent_name
+    if (-not $agentNode) {
+        $agentNode = $xml.CreateElement("agent_name")
+        $enrollment.AppendChild($agentNode) | Out-Null
+    }
+    $agentNode.InnerText = $agentName
+
     $osCaption = (Get-CimInstance Win32_OperatingSystem).Caption
     if ($osCaption -match 'Windows\s+(\d+)') {
         $windowsGroup = "windows$($Matches[1])"
     } else {
         $windowsGroup = $osCaption.ToLower().Replace(' ', '')
     }
-    $xml.ossec_config.enrollment.groups = $windowsGroup
 
-    # 4d: Set <directories> under <syscheck> to user Desktop and Downloads folders
-    $desktopDir = [Environment]::GetFolderPath("Desktop")
-    $userProfile = [Environment]::GetFolderPath("UserProfile")
-    $downloadsDir = Join-Path $userProfile 'Downloads'
+    $groupsNode = $enrollment.groups
+    if (-not $groupsNode) {
+        $groupsNode = $xml.CreateElement("groups")
+        $enrollment.AppendChild($groupsNode) | Out-Null
+    }
+    $groupsNode.InnerText = $windowsGroup
+
+    # --- Syscheck section ---
     $syscheck = $xml.ossec_config.syscheck
+    if (-not $syscheck) {
+        $syscheck = $xml.CreateElement("syscheck")
+        $xml.ossec_config.AppendChild($syscheck) | Out-Null
+    }
 
-    # Remove existing directories elements
+    # Remove existing <directories>
     $existingDirs = @($syscheck.SelectNodes("directories"))
     foreach ($dir in $existingDirs) {
         $syscheck.RemoveChild($dir) | Out-Null
     }
 
-    # Add Desktop directory
-    $desktopDirNode = $xml.CreateElement("directories")
-    $desktopDirNode.InnerText = $desktopDir
-    $desktopDirNode.SetAttribute("check_all", "yes")
-    $desktopDirNode.SetAttribute("realtime", "yes")
-    $syscheck.AppendChild($desktopDirNode) | Out-Null
+    $desktopDir = [Environment]::GetFolderPath("Desktop")
+    $downloadsDir = Join-Path ([Environment]::GetFolderPath("UserProfile")) 'Downloads'
 
-    # Add Downloads directory
-    $downloadsDirNode = $xml.CreateElement("directories")
-    $downloadsDirNode.InnerText = $downloadsDir
-    $downloadsDirNode.SetAttribute("check_all", "yes")
-    $downloadsDirNode.SetAttribute("realtime", "yes")
-    $syscheck.AppendChild($downloadsDirNode) | Out-Null
+    foreach ($path in @($desktopDir, $downloadsDir)) {
+        $dirNode = $xml.CreateElement("directories")
+        $dirNode.InnerText = $path
+        $dirNode.SetAttribute("check_all", "yes")
+        $dirNode.SetAttribute("realtime", "yes")
+        $syscheck.AppendChild($dirNode) | Out-Null
+    }
 
-    # Save the modified config and move it to the agent directory
+    # Save and replace config
     Write-Host "Applying modified CyberSentinel configuration..."
     $xml.Save($tempConfig)
     Move-Item -Path $tempConfig -Destination $configPath -Force
