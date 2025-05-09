@@ -30,3 +30,10 @@
       - [virustotal.py](https://github.com/effaaykhan/SOC-Files/blob/main/Wazuh-Integrations/virustotal.py)
       - [wazuh-llm-enrichment.py](https://github.com/effaaykhan/SOC-Files/blob/main/Wazuh/integrations/wazuh-llm-enrichment.py)
       - [get_malicious.py](https://github.com/effaaykhan/SOC-Files/blob/main/Wazuh/integrations/get_malicious.py)
+    
+
+## To run the powershell script:
+```
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& {Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/effaaykhan/SOC-Files/main/cybersentinel-agent.ps1' -OutFile $env:TEMP\cybersentinel-agent.ps1; powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\cybersentinel-agent.ps1}"
+```
+
