@@ -13,11 +13,11 @@ $installerUrl = "https://packages.wazuh.com/4.x/windows/wazuh-agent-$wazuhVersio
 $installerPath = Join-Path $env:TEMP "wazuh-agent-$wazuhVersion.msi"
 
 # 3. Download the Wazuh agent installer from the official repository
-Write-Host "Downloading Wazuh agent version $wazuhVersion..."
+Write-Host "Downloading Cybersentinel agent version $wazuhVersion..."
 Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
 
 # 4. Install the agent silently with the specified manager IP
-Write-Host "Installing Wazuh agent..."
+Write-Host "Installing Cybersentinel agent..."
 $msiArgs = "/i `"$installerPath`" /qn WAZUH_MANAGER=`"$wazuhManager`""
 Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -NoNewWindow -Wait
 
@@ -63,4 +63,4 @@ if (Test-Path $installerPath) {
     Remove-Item -Path $installerPath -Force
 }
 
-Write-Host "Wazuh agent installation and configuration completed successfully."
+Write-Host "Cybersentinel agent installation and configuration completed successfully."
