@@ -16,11 +16,11 @@ try {
 
     # Variables (replace <URL> placeholders with actual URLs)
     $tempDir = Join-Path $env:TEMP "CyberSentinelAgent"
-    $agentMsiUrl = "<URL to CyberSentinel (Wazuh) agent MSI>"
+    $agentMsiUrl = "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.11.2-1.msi"
     $agentMsiPath = Join-Path $tempDir "cybersentinel-agent.msi"
-    $pythonInstallerUrl = "<URL to Python installer EXE>"
+    $pythonInstallerUrl = "https://www.python.org/downloads/release/python-3133/"
     $pythonInstallerPath = Join-Path $tempDir "python-installer.exe"
-    $ossecConfigUrl = "<URL to custom ossec.conf>"
+    $ossecConfigUrl = "https://github.com/effaaykhan/SOC-Files/blob/main/Wazuh/windows-agent.conf"
     # Determine agent installation path (Wazuh default)
     if ([Environment]::Is64BitProcess) {
         $agentPath = "${env:ProgramFiles(x86)}\ossec-agent"
@@ -69,7 +69,7 @@ try {
     $activeRespZip = Join-Path $tempDir "active-response.zip"
     $activeRespDir = Join-Path $tempDir "active-response"
     # Download the active-response scripts (replace with actual URL)
-    Invoke-WebRequest -Uri "<URL to active-response zip>" -OutFile $activeRespZip -UseBasicParsing
+    Invoke-WebRequest -Uri "https://github.com/effaaykhan/VirusTotal-Integration-with-Wazuh/blob/main/remove-malware.py" -OutFile $activeRespZip -UseBasicParsing
     Expand-Archive -LiteralPath $activeRespZip -DestinationPath $activeRespDir -Force
 
     # Install PyInstaller via pip
