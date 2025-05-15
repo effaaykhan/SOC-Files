@@ -1,130 +1,135 @@
-# CyberSentinel Agent Installation Script
-function Write-CS($msg) { Write-Host "[CyberSentinel] $msg" }
+Write-Host ""
+Write-Host "#####  #     # #######    #####  #     #  #####  #  ####  #####  #  ####  "
+Write-Host "#     # #   #   #      #     # #     # #     # # #    # #    # # #      "
+Write-Host "#       # #    #      #       #     # #     # # #      #    # # #      "
+Write-Host "#  ####  #     #      #       #######  #     # # #      #   #  #  #####  "
+Write-Host "#     # #     #      #       #     #  #     # # #      #    # #       # "
+Write-Host "#     # #     #      #     # #     #  #     # # #    # #    # # #     # "
+Write-Host "#####   #####    ####  ####### #     #  #####  #  ####  #####  #  #####  "
+Write-Host ""
+Write-Host "#####     #####  #######  #####     #####  #     #  #####  #####  #     #  #####  "
+Write-Host "#    #   #     # #       #     #   #     # #     # #     #   #   #     # #     # "
+Write-Host "#    #   #       #       #         #       #     # #         #   #     # #       "
+Write-Host "#####    #  #### #####    #####    #       #     # #  ####   #   #     # #  ####  "
+Write-Host "#   #    #     # #             #   #       #     # #     #   #   #     # #     # "
+Write-Host "#    #   #     # #       #     #   #     # #     # #     #   #   #     # #     # "
+Write-Host "#####     #####  #######  #####     #####   #####   #####    #    #####   #####  "
+Write-Host ""
 
-# Banner
-$banner = @"
-===========================================
-=         CYBERSENTINEL AGENT            =
-===========================================
-"@
-Write-Host $banner
-Write-CS "Initializing CyberSentinel agent installation..."
+# ------------------ Agent Installation ------------------
+Write-Host "Downloading CyberSentinel Agent MSI..." -ForegroundColor Cyan
+$agentUrl  = "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.11.2-1.msi"
+$agentFile = "$env:TEMP\CyberSentinelAgent.msi"
+Invoke-WebRequest -Uri $agentUrl -OutFile $agentFile
 
-# Step 1: Download and Install Wazuh Agent
-$agentUrl = "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.11.2-1.msi"
-$msiPath = Join-Path $env:TEMP "wazuh-agent-4.11.2-1.msi"
-Write-CS "Downloading Wazuh agent MSI..."
-Invoke-WebRequest -Uri $agentUrl -OutFile $msiPath
+If (!(Test-Path $agentFile)) {
+    Write-Error "Download failed. Exiting."
+    Exit 1
+}
 
-Write-CS "Installing Wazuh (CyberSentinel) Agent silently..."
-Start-Process -FilePath "msiexec.exe" -ArgumentList "/i `"$msiPath`" /qn /norestart" -Wait
-if ($LASTEXITCODE -ne 0) { throw "MSI installation failed with code $LASTEXITCODE" }
+Write-Host "Installing CyberSentinel Agent..." -ForegroundColor Cyan
+Start-Process -FilePath msiexec.exe `
+    -ArgumentList "/i `"$agentFile`" /qn /norestart" `
+    -Wait -NoNewWindow
 
-# Step 2: Rename Wazuh Service to CyberSentinelSvc
-Write-CS "Stopping existing Wazuh service..."
-Stop-Service -Name "WazuhSvc" -ErrorAction SilentlyContinue
+If ($LASTEXITCODE -ne 0) {
+    Write-Error "Installation failed with exit code $LASTEXITCODE."
+    Exit 1
+}
+Write-Host "CyberSentinel Agent installed successfully." -ForegroundColor Green
 
-if (Test-Path "${env:ProgramFiles(x86)}\ossec-agent") {
-    $ossecPath = "${env:ProgramFiles(x86)}\ossec-agent"
-} elseif (Test-Path "${env:ProgramFiles}\ossec-agent") {
-    $ossecPath = "${env:ProgramFiles}\ossec-agent"
+# ------------------ Rename Service ------------------
+Write-Host "Renaming service to CyberSentinelSvc..." -ForegroundColor Cyan
+$oldSvcName = "WazuhSvc"
+$newSvcName = "CyberSentinelSvc"
+$displayName = "CyberSentinel Agent"
+
+If (Get-Service -Name $oldSvcName -ErrorAction SilentlyContinue) {
+    Stop-Service -Name $oldSvcName -Force -ErrorAction SilentlyContinue
+}
+
+$ossecDir = Join-Path ([Environment]::GetFolderPath("ProgramFilesX86")) "ossec-agent"
+$binPath = "`"$ossecDir\wazuhsvc.exe`""
+
+New-Service -Name $newSvcName -DisplayName $displayName `
+    -BinaryPathName $binPath -StartupType Automatic
+
+sc.exe delete $oldSvcName
+
+Write-Host "Service renamed: $oldSvcName ➔ $newSvcName (Display Name: $displayName)." -ForegroundColor Green
+
+# ------------------ Apply Configuration ------------------
+Write-Host "Applying custom configuration..." -ForegroundColor Cyan
+$confUrl  = "https://raw.githubusercontent.com/effaaykhan/SOC-Files/main/Wazuh/windows-agent.conf"
+$confFile = Join-Path $ossecDir "ossec.conf"
+
+Invoke-WebRequest -Uri $confUrl -OutFile $confFile -UseBasicParsing
+Write-Host "Configuration file applied: $confFile" -ForegroundColor Green
+
+# ------------------ Python & PyInstaller ------------------
+Write-Host "Checking for Python..." -ForegroundColor Cyan
+if (!(Get-Command python.exe -ErrorAction SilentlyContinue)) {
+    Write-Host "Python not found. Installing Python 3.13.3..." -ForegroundColor Cyan
+    $pythonUrl  = "https://www.python.org/ftp/python/3.13.3/python-3.13.3-amd64.exe"
+    $pythonFile = "$env:TEMP\python-3.13.3-amd64.exe"
+    Invoke-WebRequest -Uri $pythonUrl -OutFile $pythonFile
+
+    Start-Process -FilePath $pythonFile `
+        -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1" `
+        -Wait -NoNewWindow
+
+    Remove-Item $pythonFile
+    Write-Host "Python 3.13.3 installed successfully." -ForegroundColor Green
 } else {
-    throw "Wazuh Agent installation directory not found."
+    Write-Host "Python is already installed. Skipping installation." -ForegroundColor Green
 }
 
-$binPath = "`"$ossecPath\ossec-agent.exe`""
-Write-CS "Renaming Wazuh service to CyberSentinelSvc..."
-Start-Process -FilePath "sc.exe" -ArgumentList "create CyberSentinelSvc binPath= $binPath DisplayName= `"CyberSentinel Agent`" start= auto obj= LocalSystem" -Wait
-Start-Process -FilePath "sc.exe" -ArgumentList "delete WazuhSvc" -Wait
+Write-Host "Installing/upgrading PyInstaller..." -ForegroundColor Cyan
+python -m pip install --upgrade pip
+python -m pip install pyinstaller
+Write-Host "PyInstaller is ready." -ForegroundColor Green
 
-Write-CS "Starting CyberSentinelSvc..."
-Start-Service -Name "CyberSentinelSvc"
-Start-Sleep -Seconds 5
-if ((Get-Service -Name "CyberSentinelSvc").Status -ne 'Running') {
-    throw "CyberSentinelSvc failed to start."
-}
+# ------------------ Compile Active-Response Scripts ------------------
+Write-Host "Downloading active-response scripts..." -ForegroundColor Cyan
+$script1Url  = "https://raw.githubusercontent.com/effaaykhan/VirusTotal-Integration-with-Wazuh/main/remove-threat.py"
+$script2Url  = "https://raw.githubusercontent.com/effaaykhan/VirusTotal-Integration-with-Wazuh/main/remove-malware.py"
+$script1File = "$env:TEMP\remove-threat.py"
+$script2File = "$env:TEMP\remove-malware.py"
 
-# Step 3: Apply Custom ossec.conf
-$configUrl = "https://raw.githubusercontent.com/effaaykhan/SOC-Files/main/Wazuh/windows-agent.conf"
-$configPath = Join-Path $ossecPath "ossec.conf"
-Write-CS "Downloading custom ossec.conf..."
-Invoke-WebRequest -Uri $configUrl -OutFile $configPath
+Invoke-WebRequest -Uri $script1Url -OutFile $script1File
+Invoke-WebRequest -Uri $script2Url -OutFile $script2File
 
-Write-CS "Restarting service to apply config..."
-Stop-Service -Name "CyberSentinelSvc"
-Start-Service -Name "CyberSentinelSvc"
-Write-CS "Configuration applied successfully."
+Write-Host "Compiling scripts with PyInstaller..." -ForegroundColor Cyan
+Push-Location $env:TEMP
+python -m PyInstaller -F $script1File
+python -m PyInstaller -F $script2File
+Pop-Location
 
-# Step 4: Install Python & PyInstaller
-function Install-Python {
-    Write-CS "Installing Python..."
-    $arch = if ($ENV:PROCESSOR_ARCHITECTURE -match "AMD64") { "amd64" } else { "" }
-    $pyVersion = "3.13.3"
-    $pythonExe = if ($arch -eq "amd64") {
-        "python-$pyVersion-$arch.exe"
-    } else {
-        "python-$pyVersion.exe"
-    }
-    $pythonUrl = "https://www.python.org/ftp/python/$pyVersion/$pythonExe"
-    $pyPath = Join-Path $env:TEMP $pythonExe
-    Invoke-WebRequest -Uri $pythonUrl -OutFile $pyPath
-    Start-Process -FilePath $pyPath -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1" -Wait
-    Remove-Item $pyPath -Force
-    Write-CS "Python installed."
-}
+$srcExe1 = Join-Path "$env:TEMP\dist" "remove-threat.exe"
+$srcExe2 = Join-Path "$env:TEMP\dist" "remove-malware.exe"
+$binDir  = Join-Path $ossecDir "active-response\bin"
 
-if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-    Install-Python
+Move-Item $srcExe1 $binDir
+Move-Item $srcExe2 $binDir
+Write-Host "Active-response executables deployed to $binDir" -ForegroundColor Green
+
+# ------------------ Restart Service ------------------
+Write-Host "Restarting CyberSentinel service..." -ForegroundColor Cyan
+Restart-Service -Name $newSvcName -Force
+Write-Host "Service $newSvcName restarted." -ForegroundColor Green
+
+# ------------------ Verification ------------------
+If (Test-Path (Join-Path $binDir "remove-threat.exe") -and `
+    Test-Path (Join-Path $binDir "remove-malware.exe")) {
+    Write-Host "Active-response executables verified in bin directory." -ForegroundColor Green
 } else {
-    Write-CS "Python already installed."
+    Write-Error "ERROR: Active-response executables are missing!"
+    Exit 1
 }
 
-# Reload path in current session
-$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine")
-Write-CS "Installing PyInstaller..."
-Start-Process -FilePath "python" -ArgumentList "-m pip install pyinstaller" -Wait
-
-# Step 5: Compile and Move Active Response Scripts
-$activeRespScripts = @("remove-threat.py","remove-malware.py")
-foreach ($scriptName in $activeRespScripts) {
-    $url = "https://raw.githubusercontent.com/effaaykhan/VirusTotal-Integration-with-Wazuh/main/$scriptName"
-    $localPy = Join-Path $env:TEMP $scriptName
-    Write-CS "Downloading $scriptName..."
-    Invoke-WebRequest -Uri $url -OutFile $localPy
-
-    Write-CS "Compiling $scriptName..."
-    Start-Process -FilePath "pyinstaller" -ArgumentList "-F `"$localPy`"" -NoNewWindow -Wait
-
-    # Move .exe to active-response\bin
-    $exeName = [System.IO.Path]::GetFileNameWithoutExtension($scriptName) + ".exe"
-    $exeSource = Join-Path (Join-Path (Get-Location) "dist") $exeName
-    $exeTargetDir = Join-Path $ossecPath "active-response\bin"
-    if (-not (Test-Path $exeTargetDir)) {
-        throw "Target directory $exeTargetDir does not exist."
-    }
-    Move-Item -Path $exeSource -Destination (Join-Path $exeTargetDir $exeName) -Force
-    Write-CS "Moved $exeName to $exeTargetDir"
-}
-
-# Step 6: Final Checks and Cleanup
-$threatExe = Join-Path $ossecPath "active-response\bin\remove-threat.exe"
-$malwareExe = Join-Path $ossecPath "active-response\bin\remove-malware.exe"
-if ((Test-Path $threatExe) -and (Test-Path $malwareExe)) {
-    Write-CS "All active-response scripts compiled and deployed successfully."
-} else {
-    throw "One or more .exe files missing from $($ossecPath)\active-response\bin"
-}
-
-Write-CS "Restarting CyberSentinelSvc for final confirmation..."
-Restart-Service -Name "CyberSentinelSvc"
-
-# Cleanup
-Write-CS "Cleaning temporary files..."
-Remove-Item $msiPath -Force -ErrorAction SilentlyContinue
-Get-ChildItem $env:TEMP -Filter "remove-*.py" | Remove-Item -Force -ErrorAction SilentlyContinue
-Remove-Item ".\build" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item ".\dist" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item ".\__pycache__" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item ".\*.spec" -Force -ErrorAction SilentlyContinue
-
-Write-CS "✅ CyberSentinel Agent setup completed successfully!"
+# ------------------ Cleanup ------------------
+Write-Host "Cleaning up temporary files..." -ForegroundColor Cyan
+Remove-Item "$env:TEMP\dist","$env:TEMP\build" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item $script1File,$script2File -Force -ErrorAction SilentlyContinue
+Remove-Item $agentFile -Force -ErrorAction SilentlyContinue
+Write-Host "Cleanup complete. Deployment finished successfully!" -ForegroundColor Green
