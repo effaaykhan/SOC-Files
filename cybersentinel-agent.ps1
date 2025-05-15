@@ -1,31 +1,57 @@
-# Display starting message
 Write-Host "Installing CyberSentinel Agent..." -ForegroundColor Cyan
 
-# Define paths
-$binDir = Join-Path $PSScriptRoot "bin"
-$oldAgentExe = Join-Path $binDir "agent.exe"            # assuming original name
-$newAgentExe = Join-Path $binDir "cybersentinel.exe"    # new name to use
-
-# Rename agent executable if it exists and not already renamed
-if (Test-Path $oldAgentExe) {
-    Rename-Item -Path $oldAgentExe -NewName "cybersentinel.exe" -Force
-    Write-Host "Agent executable renamed to 'cybersentinel.exe'." -ForegroundColor Green
-} elseif (Test-Path $newAgentExe) {
-    Write-Host "Agent executable already named 'cybersentinel.exe'." -ForegroundColor Green
-} else {
-    Write-Warning "Agent executable not found in bin directory."
-}
-
-# Service name to use
+# Variables
+$agentUrl = "https://example.com/cybersentinel-agent.zip"   # REPLACE this with your actual agent archive URL
+$tempZip = Join-Path $env:TEMP "cybersentinel-agent.zip"
+$installDir = Join-Path $PSScriptRoot "bin"
+$oldAgentExe = "agent.exe"              # original agent exe name inside the zip
+$newAgentExe = "cybersentinel.exe"
 $serviceName = "CyberSentinel"
 
-# Start the service if it exists
-if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
-    Start-Service -Name $serviceName
-    Write-Host "Service '$serviceName' started successfully." -ForegroundColor Green
-} else {
-    Write-Warning "Service '$serviceName' not found. Skipping service start."
+# Download agent zip
+Write-Host "Downloading CyberSentinel agent..." -ForegroundColor Cyan
+Invoke-WebRequest -Uri $agentUrl -OutFile $tempZip
+
+# Create install directory if missing
+if (-not (Test-Path $installDir)) {
+    New-Item -Path $installDir -ItemType Directory | Out-Null
 }
 
-# Final success message
+# Extract agent archive
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::ExtractToDirectory($tempZip, $installDir)
+
+# Delete zip file
+Remove-Item $tempZip -Force
+
+# Rename agent executable if exists
+$oldExePath = Join-Path $installDir $oldAgentExe
+$newExePath = Join-Path $installDir $newAgentExe
+if (Test-Path $oldExePath) {
+    Rename-Item -Path $oldExePath -NewName $newAgentExe -Force
+    Write-Host "Renamed agent executable to '$newAgentExe'." -ForegroundColor Green
+} elseif (Test-Path $newExePath) {
+    Write-Host "Agent executable already named '$newAgentExe'." -ForegroundColor Green
+} else {
+    Write-Warning "Agent executable not found in bin directory!"
+}
+
+# Remove existing service if any
+if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
+    Write-Host "Stopping existing service '$serviceName'..."
+    Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+    Write-Host "Removing existing service '$serviceName'..."
+    sc.exe delete $serviceName | Out-Null
+    Start-Sleep -Seconds 2
+}
+
+# Create new service
+$exePathQuoted = "`"$newExePath`""
+Write-Host "Installing service '$serviceName'..."
+sc.exe create $serviceName binPath= $exePathQuoted start= auto | Out-Null
+
+# Start the service
+Start-Service -Name $serviceName
+Write-Host "Service '$serviceName' started successfully." -ForegroundColor Green
+
 Write-Host "Deployment finished successfully!" -ForegroundColor Green
