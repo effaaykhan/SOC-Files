@@ -1,34 +1,26 @@
-# Step 1: Download and Install Wazuh Agent
-$installerPath = "$env:TEMP\wazuh-agent.msi"
-Invoke-WebRequest -Uri "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.11.2-1.msi" -OutFile $installerPath
+# Variables
+$wazuhUrl = "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.11.2-1.msi"
+$customConfUrl = "https://raw.githubusercontent.com/effaaykhan/SOC-Files/main/Wazuh/windows-agent.conf"
+$tmpInstaller = "$env:TEMP\wazuh-agent.msi"
+$confDestination = "C:\Program Files (x86)\ossec-agent\ossec.conf"
 
-# Install silently and set Wazuh manager IP
-Start-Process "msiexec.exe" -ArgumentList "/i `"$installerPath`" /qn WAZUH_MANAGER='192.168.1.69'" -Wait
+# Step 1: Download the Wazuh Agent installer
+Invoke-WebRequest -Uri $wazuhUrl -OutFile $tmpInstaller
 
-# Wait a moment for service to register
-Start-Sleep -Seconds 5
+# Step 2: Install Wazuh Agent silently
+Start-Process -Wait msiexec.exe -ArgumentList "/i `"$tmpInstaller`" /q WAZUH_MANAGER='192.168.1.69' WAZUH_AGENT_GROUP='windows'"
 
-# Step 2: Cosmetic Rename — DisplayName and Description
+# Wait a moment for the installation to complete
+Start-Sleep -Seconds 10
+
+# Step 3: Download custom ossec.conf from GitHub and replace existing
+Invoke-WebRequest -Uri $customConfUrl -OutFile $confDestination -UseBasicParsing
+
+# Step 4: Rename the Wazuh service display name to "CyberSentinel Agent"
 Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\WazuhSvc" -Name "DisplayName" -Value "CyberSentinel Agent"
-Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\WazuhSvc" -Name "Description" -Value "CyberSentinel Agent for Security Monitoring"
 
-# Step 3: Rename UI shortcuts
-$paths = @(
-    "$env:ProgramData\Microsoft\Windows\Start Menu\Programs",
-    "$env:Public\Desktop",
-    "$env:UserProfile\Desktop"
-)
-foreach ($path in $paths) {
-    if (Test-Path $path) {
-        Get-ChildItem $path -Filter "*Wazuh*" -Recurse -ErrorAction SilentlyContinue |
-        ForEach-Object {
-            $newName = $_.Name -replace 'Wazuh', 'CyberSentinel'
-            Rename-Item -Path $_.FullName -NewName $newName -ErrorAction SilentlyContinue
-        }
-    }
-}
+# Step 5: Restart the Wazuh service (now will appear as "CyberSentinel Agent")
+Restart-Service -Name WazuhSvc
 
-# Step 4: Restart the service to apply
-Restart-Service -Name "WazuhSvc"
-
-Write-Host "`n✅ CyberSentinel Agent installed successfully'. Service is running.`n"
+# Optional: Confirm the rename
+Write-Host "`n[+] CyberSentinel agent Installation complete." -ForegroundColor Green
