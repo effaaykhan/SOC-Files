@@ -1,62 +1,154 @@
-# Requires Admin privileges and Windows PowerShell (run as Administrator)
+# CyberSentinel Agent Installation Script
 
-# 1. Check for Administrator
-if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
-           ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Error "This script must be run as Administrator."
-    exit 1
+# ASCII Banner
+$banner = @"
+  ____      _           _____                      _ _ _             _       _       
+ / ___| ___| |_ _ __   | ____|_  _____  ___ _   _| | (_) __ _ _ __ (_)_ __ | |_ ___ 
+| |  _ / _ \ __| '__|  |  _| \ \/ / _ \/ __| | | | | | |/ _` | '_ \| | '_ \| __/ _ \
+| |_| |  __/ |_| |     | |___ >  <  __/ (__| |_| | | | | (_| | | | | | | | | ||  __/
+ \____|\___|\__|_|     |_____/ _/\_\___|\___|\__,_|_|_|_|\__,_|_| |_|_|_| |_|\__\___|
+                                                                            _/ |        
+                                                                           |__/         
+ CyberSentinel Agent Installation
+"@
+Write-Host $banner
+
+$ErrorActionPreference = 'Stop'
+
+# Create a temporary directory for downloads and builds
+$tempDir = Join-Path $env:TEMP 'CyberSentinelAgent'
+if (!(Test-Path $tempDir)) { New-Item -ItemType Directory -Path $tempDir | Out-Null }
+
+# 1. Download and Install Wazuh Agent (rebranded)
+$agentUrl = 'https://packages.wazuh.com/4.x/windows/wazuh-agent-4.11.2-1.msi'
+$installerPath = Join-Path $tempDir 'wazuh-agent-4.11.2-1.msi'
+
+Write-Host "Downloading CyberSentinel Agent installer..."
+try {
+    Invoke-WebRequest -Uri $agentUrl -OutFile $installerPath -UseBasicParsing
+    Write-Host "Downloaded installer to $installerPath"
+} catch {
+    Write-Error "Failed to download agent installer: $($_.Exception.Message)"; exit 1
 }
 
-# 2. Download and Install CyberSentinel agent (Wazuh agent 4.11.2-1)
-Write-Host "Downloading CyberSentinel agent installer..."
-$msiUrl  = 'https://packages.wazuh.com/4.x/windows/wazuh-agent-4.11.2-1.msi'
-$msiPath = Join-Path $env:TEMP 'CyberSentinel-agent.msi'
-if (Test-Path $msiPath) { Remove-Item $msiPath -Force }
-Invoke-WebRequest -Uri $msiUrl -OutFile $msiPath
-
-Write-Host "Installing CyberSentinel agent..."
-Start-Process -FilePath msiexec.exe -ArgumentList '/i', $msiPath, '/qn', 'WAZUH_MANAGER="192.168.1.69"' -Wait -NoNewWindow
-
-# 3. Wait for the installation directory (64-bit default)
-$installDir = "${env:ProgramFiles(x86)}\ossec-agent"
-$maxWaitSec = 60; $waitSec = 0
-Write-Host "Waiting for installation directory to appear..."
-while (-not (Test-Path $installDir) -and ($waitSec -lt $maxWaitSec)) {
-    Start-Sleep -Seconds 1
-    $waitSec++
+Write-Host "Installing CyberSentinel Agent..."
+try {
+    Start-Process msiexec.exe -ArgumentList "/i `"$installerPath`" /qn" -Wait -NoNewWindow
+    Write-Host "CyberSentinel Agent installation completed."
+} catch {
+    Write-Error "Agent installation failed: $($_.Exception.Message)"; exit 1
 }
-if (-not (Test-Path $installDir)) {
-    Write-Error "Installation directory '$installDir' not found after waiting."
-    exit 1
+
+# 2. Apply Custom ossec.conf Configuration
+Write-Host "Stopping CyberSentinel Agent service..."
+Stop-Service -Name WazuhSvc -Force -ErrorAction SilentlyContinue
+Stop-Service -Name Wazuh    -Force -ErrorAction SilentlyContinue
+
+$configUrl = 'https://raw.githubusercontent.com/effaaykhan/SOC-Files/main/Wazuh/windows-agent.conf'
+$configPath = 'C:\Program Files (x86)\ossec-agent\ossec.conf'
+
+Write-Host "Applying custom configuration (ossec.conf)..."
+try {
+    Invoke-WebRequest -Uri $configUrl -OutFile $configPath -UseBasicParsing
+    Write-Host "Custom configuration applied to $configPath"
+} catch {
+    Write-Error "Failed to apply custom configuration: $($_.Exception.Message)"; exit 1
 }
-Write-Host "Installation directory found at $installDir"
 
-# 4. Download and replace the configuration file
-Write-Host "Applying custom configuration..."
-$configUrl  = 'https://raw.githubusercontent.com/effaaykhan/SOC-Files/main/Wazuh/windows-agent.conf'
-$configTemp = Join-Path $env:TEMP 'windows-agent.conf'
-if (Test-Path $configTemp) { Remove-Item $configTemp -Force }
-Invoke-WebRequest -Uri $configUrl -OutFile $configTemp
+# 3. Check for Python and Install if Missing
+Write-Host "Checking for Python installation..."
+try {
+    $pythonVersion = (& python --version) -replace 'Python ', '' 2>$null
+} catch {
+    $pythonVersion = $null
+}
 
-$configDest = Join-Path $installDir 'ossec.conf'
-Copy-Item -Path $configTemp -Destination $configDest -Force
-Remove-Item $configTemp -Force
+if ($pythonVersion) {
+    Write-Host "Python is already installed (Version $pythonVersion)."
+} else {
+    $userInput = Read-Host "Python is not installed. Install latest Python now? (Y/N)"
+    if ($userInput -match '^[Yy]') {
+        Write-Host "Downloading Python installer..."
+        $pythonUrl = 'https://www.python.org/ftp/python/3.13.3/python-3.13.3-amd64.exe'
+        $pythonInstaller = Join-Path $tempDir 'python-latest-amd64.exe'
+        try {
+            Invoke-WebRequest -Uri $pythonUrl -OutFile $pythonInstaller -UseBasicParsing
+            Write-Host "Installing Python silently..."
+            Start-Process -FilePath $pythonInstaller -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 Include_pip=1" -Wait -NoNewWindow
+            Write-Host "Python installation completed."
+        } catch {
+            Write-Error "Failed to install Python: $($_.Exception.Message)"; exit 1
+        }
+    } else {
+        Write-Error "Python installation canceled by user. Cannot continue."; exit 1
+    }
+}
 
-# 5. Enable Windows audit policy (Plug and Play, Removable Storage, File System)
-Write-Host "Enabling audit for Plug and Play Events, Removable Storage, and File System..."
-$auditCmd = '/set /subcategory:"Plug and Play Events","Removable Storage","File System" /success:enable /failure:enable'
-Start-Process auditpol.exe -ArgumentList $auditCmd -Wait -NoNewWindow
+# 4. Install PyInstaller via pip
+Write-Host "Installing PyInstaller..."
+try {
+    Start-Process -FilePath "python" -ArgumentList "-m pip install --upgrade pyinstaller" -Wait -NoNewWindow
+    Write-Host "PyInstaller installed successfully."
+} catch {
+    Write-Error "PyInstaller installation failed: $($_.Exception.Message)"; exit 1
+}
 
-# 6. Enable the Microsoft-DriverFrameworks-UserMode/Operational log
-Write-Host "Enabling Microsoft-Windows-DriverFrameworks-UserMode/Operational log..."
-wevtutil sl "Microsoft-Windows-DriverFrameworks-UserMode/Operational" /e:true
+# 5. Download Active-Response Python Scripts
+Write-Host "Downloading active-response scripts..."
+$threatPy = Join-Path $tempDir 'remove-threat.py'
+$malwarePy = Join-Path $tempDir 'remove-malware.py'
+try {
+    Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/effaaykhan/VirusTotal-Integration-with-Wazuh/main/remove-threat.py' -OutFile $threatPy -UseBasicParsing
+    Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/effaaykhan/VirusTotal-Integration-with-Wazuh/main/remove-malware.py' -OutFile $malwarePy -UseBasicParsing
+    Write-Host "Downloaded Python scripts for active-response."
+} catch {
+    Write-Error "Failed to download active-response scripts: $($_.Exception.Message)"; exit 1
+}
 
-# 7. Restart the CyberSentinel (WazuhSvc) service
-Write-Host "Restarting CyberSentinel agent service..."
-Restart-Service -Name WazuhSvc -Force -ErrorAction Stop
+# 6. Build Executables with PyInstaller
+Write-Host "Building executables from Python scripts..."
+try {
+    Start-Process -FilePath "pyinstaller" -ArgumentList "-F `"$threatPy`"" -Wait -NoNewWindow
+    Start-Process -FilePath "pyinstaller" -ArgumentList "-F `"$malwarePy`"" -Wait -NoNewWindow
+    Write-Host "Executables built successfully."
+} catch {
+    Write-Error "Failed to build executables: $($_.Exception.Message)"; exit 1
+}
 
-# 8. Clean up temp files
+# 7. Deploy Executables to Active-Response Bin
+$binDir = 'C:\Program Files (x86)\ossec-agent\active-response\bin'
+Write-Host "Deploying executables to active-response bin..."
+try {
+    Copy-Item -Path (Join-Path $tempDir 'dist\remove-threat.exe')   -Destination (Join-Path $binDir 'remove-threat.exe')   -Force
+    Copy-Item -Path (Join-Path $tempDir 'dist\remove-malware.exe') -Destination (Join-Path $binDir 'remove-malware.exe') -Force
+    if (Test-Path (Join-Path $binDir 'remove-threat.exe') -and Test-Path (Join-Path $binDir 'remove-malware.exe')) {
+        Write-Host "Executables successfully deployed to $binDir."
+    } else {
+        Write-Error "Executable files not found in $binDir."; exit 1
+    }
+} catch {
+    Write-Error "Failed to copy executables: $($_.Exception.Message)"; exit 1
+}
+
+# 8. Restart Agent Service
+Write-Host "Restarting CyberSentinel Agent service..."
+try {
+    Stop-Service -Name WazuhSvc -Force -ErrorAction SilentlyContinue
+    Stop-Service -Name Wazuh    -Force -ErrorAction SilentlyContinue
+    Start-Service -Name WazuhSvc -ErrorAction SilentlyContinue
+    Start-Service -Name Wazuh    -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 5
+    Write-Host "CyberSentinel Agent service restarted successfully."
+} catch {
+    Write-Error "Failed to restart agent service: $($_.Exception.Message)"; exit 1
+}
+
+# 9. Cleanup
 Write-Host "Cleaning up temporary files..."
-if (Test-Path $msiPath) { Remove-Item $msiPath -Force }
-
-Write-Host "CyberSentinel agent installation and configuration complete."
+try {
+    Remove-Item -Path $tempDir -Recurse -Force
+    Write-Host "Temporary files removed."
+} catch {
+    Write-Warning "Could not completely remove temporary files: $($_.Exception.Message)"
+}
+Write-Host "CyberSentinel Agent installation completed successfully."
