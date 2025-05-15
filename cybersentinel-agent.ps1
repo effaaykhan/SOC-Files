@@ -3,21 +3,23 @@ Write-Host "Installing CyberSentinel Agent..." -ForegroundColor Cyan
 
 # Define paths
 $binDir = Join-Path $PSScriptRoot "bin"
-$scriptFile = $MyInvocation.MyCommand.Definition
+$oldAgentExe = Join-Path $binDir "agent.exe"            # assuming original name
+$newAgentExe = Join-Path $binDir "cybersentinel.exe"    # new name to use
 
-# Simulate download or setup (example, replace with actual logic if needed)
-Write-Host "Downloading CyberSentinel agent..." -ForegroundColor Cyan
-
-# Example: Verify presence of executables
-if ((Test-Path (Join-Path $binDir "remove-threat.exe")) -and (Test-Path (Join-Path $binDir "remove-malware.exe"))) {
-    Write-Host "Active-response executables verified in bin directory." -ForegroundColor Green
+# Rename agent executable if it exists and not already renamed
+if (Test-Path $oldAgentExe) {
+    Rename-Item -Path $oldAgentExe -NewName "cybersentinel.exe" -Force
+    Write-Host "Agent executable renamed to 'cybersentinel.exe'." -ForegroundColor Green
+} elseif (Test-Path $newAgentExe) {
+    Write-Host "Agent executable already named 'cybersentinel.exe'." -ForegroundColor Green
 } else {
-    Write-Error "ERROR: Active-response executables are missing!"
-    Exit 1
+    Write-Warning "Agent executable not found in bin directory."
 }
 
-# (Optional) Start service
-$serviceName = "CyberSentinelSvc"
+# Service name to use
+$serviceName = "CyberSentinel"
+
+# Start the service if it exists
 if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
     Start-Service -Name $serviceName
     Write-Host "Service '$serviceName' started successfully." -ForegroundColor Green
@@ -25,10 +27,5 @@ if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
     Write-Warning "Service '$serviceName' not found. Skipping service start."
 }
 
-# (Optional) Clean up temp files
-# Write-Host "Cleaning up temporary files..." -ForegroundColor Cyan
-# Remove-Item "$env:TEMP\dist","$env:TEMP\build" -Recurse -Force -ErrorAction SilentlyContinue
-# Remove-Item $scriptFile -Force -ErrorAction SilentlyContinue
-
 # Final success message
-Write-Host "Cleanup complete. Deployment finished successfully!" -ForegroundColor Green
+Write-Host "Deployment finished successfully!" -ForegroundColor Green
