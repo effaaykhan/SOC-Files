@@ -1,54 +1,66 @@
-# Ensure script is run as Administrator
-if (-NOT ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Warning "You do not have Administrator rights to run this script! Please re-run as Administrator."
-    exit 1
+# 1. Check for Administrator privileges
+if (-not ([Security.Principal.WindowsPrincipal] `
+        [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(`
+        [Security.Principal.WindowsBuiltinRole]::Administrator)) {
+    Write-Warning "This script must be run as Administrator."
+    Exit 1
 }
 
-# Step 1: Download and install the CyberSentinel agent (Wazuh)
+# 2. Define variables for version, manager IP, and installer paths
+$wazuhVersion = "4.11.2-1"
 $wazuhManager = "192.168.1.69"
-$agentVersion = "4.11.2-1"
-$installerUrl = "https://packages.wazuh.com/4.x/windows/wazuh-agent-${agentVersion}.msi"
-$msiPath = "$env:TEMP\wazuh-agent-${agentVersion}.msi"
+$installerUrl = "https://packages.wazuh.com/4.x/windows/wazuh-agent-$wazuhVersion.msi"
+$installerPath = Join-Path $env:TEMP "wazuh-agent-$wazuhVersion.msi"
 
-Invoke-WebRequest -Uri $installerUrl -OutFile $msiPath
-Start-Process -FilePath msiexec.exe -ArgumentList "/i `"$msiPath`" /qn WAZUH_MANAGER=$wazuhManager" -Wait
+# 3. Download the Wazuh agent installer from the official repository
+Write-Host "Downloading Wazuh agent version $wazuhVersion..."
+Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
 
-# Step 2: Determine installation path
-$installDir = "${env:ProgramFiles}\ossec-agent"
-if (-Not (Test-Path $installDir)) {
-    $installDir = "${env:ProgramFiles(x86)}\ossec-agent"
-}
-$configPath = Join-Path -Path $installDir -ChildPath "ossec.conf"
+# 4. Install the agent silently with the specified manager IP
+Write-Host "Installing Wazuh agent..."
+$msiArgs = "/i `"$installerPath`" /qn WAZUH_MANAGER=`"$wazuhManager`""
+Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -NoNewWindow -Wait
 
-# Step 3: Download the custom ossec.conf (no modifications)
-$rawConfigUrl = "https://raw.githubusercontent.com/firdouskhan000/CyberSentinel/main/ossec.conf"
-$tempConfig = "$env:TEMP\ossec.conf"
-Invoke-WebRequest -Uri $rawConfigUrl -OutFile $tempConfig
-
-# Step 4: Replace the configuration file without modifications
-Copy-Item -Path $tempConfig -Destination $configPath -Force
-
-# Step 5: Configure Windows Audit Policies
-AuditPol /set /subcategory:"Plug and Play Events" /success:enable /failure:enable
-AuditPol /set /subcategory:"Removable Storage" /success:enable /failure:enable
-AuditPol /set /subcategory:"File System" /success:enable /failure:enable
-
-# Enable DriverFrameworks-UserMode/Operational log
-wevtutil set-log Microsoft-Windows-DriverFrameworks-UserMode/Operational /enabled:true
-
-# Step 6: Restart the CyberSentinel (Wazuh) service
-Stop-Service -Name "WazuhSvc" -Force
-Start-Service -Name "WazuhSvc"
-Start-Sleep -Seconds 5
-$service = Get-Service -Name "WazuhSvc"
-if ($service.Status -eq "Running") {
-    Write-Host "CyberSentinel agent service is running."
+# 5. Replace the default ossec.conf with custom configuration
+# Determine the install directory (32-bit vs 64-bit)
+if (Test-Path "$env:ProgramFiles(x86)\ossec-agent") {
+    $installDir = "$env:ProgramFiles(x86)\ossec-agent"
 } else {
-    Write-Warning "CyberSentinel agent service is not running."
+    $installDir = "$env:ProgramFiles\ossec-agent"
+}
+$configPath = Join-Path $installDir "ossec.conf"
+
+# Remove existing config if present
+if (Test-Path $configPath) {
+    Remove-Item -Path $configPath -Force
 }
 
-# Step 7: Cleanup
-Remove-Item -Path $msiPath -Force
-Remove-Item -Path $tempConfig -Force
+# Download custom ossec.conf from GitHub
+Write-Host "Downloading custom ossec.conf configuration..."
+$customConfigUrl = "https://raw.githubusercontent.com/effaaykhan/SOC-Files/main/Wazuh/windows-agent.conf"
+Invoke-WebRequest -Uri $customConfigUrl -OutFile $configPath
 
-Write-Host "CyberSentinel agent deployment and configuration complete."
+# 6. Enable Windows audit policies for Plug and Play, Removable Storage, and File System
+Write-Host "Configuring Windows audit policies..."
+auditpol /set /subcategory:"Plug and Play Events"   /success:enable /failure:enable
+auditpol /set /subcategory:"Removable Storage"      /success:enable /failure:enable
+auditpol /set /subcategory:"File System"           /success:enable /failure:enable
+
+# 7. Enable the Microsoft-Windows-DriverFrameworks-UserMode/Operational event log
+Write-Host "Enabling Microsoft-Windows-DriverFrameworks-UserMode/Operational log..."
+wevtutil.exe sl "Microsoft-Windows-DriverFrameworks-UserMode/Operational" /e:true
+
+# 8. Restart the Wazuh service to apply changes
+$service = Get-Service -Name WazuhSvc -ErrorAction SilentlyContinue
+if ($service -ne $null) {
+    Write-Host "Restarting Wazuh service..."
+    Restart-Service -Name WazuhSvc -Force
+}
+
+# 9. Cleanup temporary files
+Write-Host "Cleaning up temporary files..."
+if (Test-Path $installerPath) {
+    Remove-Item -Path $installerPath -Force
+}
+
+Write-Host "Wazuh agent installation and configuration completed successfully."
