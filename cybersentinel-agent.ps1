@@ -31,4 +31,4 @@ foreach ($path in $paths) {
 # Step 4: Restart the service to apply
 Restart-Service -Name "WazuhSvc"
 
-Write-Host "`n✅ Wazuh Agent installed and branded as 'CyberSentinel Agent'. Service is running.`n"
+Write-Host "`n✅ CyberSentinel Agent installed successfully'. Service is running.`n"
