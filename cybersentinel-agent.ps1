@@ -1,7 +1,7 @@
 # Define Variables
 $agentUrl = "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.11.2-1.msi"
 $agentInstaller = "$env:TEMP\cybersentinel-agent.msi"
-$configUrl = "https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/YOUR_REPO/main/ossec.conf"  # Change this to your actual config file
+$configUrl = "https://raw.githubusercontent.com/effaaykhan/SOC-Files/blob/main/Wazuh/windows-agent.conf"  # Change this to your actual config file
 $configDest = "C:\Program Files (x86)\ossec-agent\ossec.conf"
 $wazuhManager = "192.168.1.69"
 
