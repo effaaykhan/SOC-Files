@@ -1,113 +1,151 @@
-<#
-  ____                 _               ____             _   _ _       
- / ___|  ___ _ __ ___ (_)_ __   __ _  / ___|  ___ _ __(_)_(_) |_ ___ 
- \___ \ / _ \ '_ ` _ \| | '_ \ / _` | \___ \ / __| '__| | | | __/ _ \
-  ___) |  __/ | | | | | | | | | (_| |  ___) | (__| |  | | | | ||  __/
- |____/ \___|_| |_| |_|_|_| |_|\__, | |____/ \___|_|  |_|_|_|\__\___|
-                                |___/                              
-CyberSentinel Agent - Wazuh Agent Rebranding Script
-#>
+# Ensure running as administrator
+if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
+    ).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
+    Write-Error "This script must be run as Administrator."
+    exit 1
+}
 
-# Enable verbose output
-$VerbosePreference = "Continue"
+# Variables
+$wazuhVersion = "4.11.2-1"
+$msiUrl = "https://packages.wazuh.com/4.x/windows/wazuh-agent-$wazuhVersion.msi"
+$msiPath = Join-Path $env:TEMP "wazuh-agent-$wazuhVersion.msi"
+$managerIP = "192.168.1.69"
 
-function Write-Info { param($Message); Write-Host "[*] $Message" }
-function Write-Warn { param($Message); Write-Warning "[!] $Message" }
-
-# 1. Download and install the Wazuh agent silently
-Write-Info "Downloading Wazuh Agent installer..."
-$installerUrl = "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.11.2-1.msi"
-$tempInstaller = "$env:TEMP\wazuh-agent-4.11.2-1.msi"
+# Download the Wazuh agent MSI
+Write-Host "Downloading Wazuh Agent MSI from $msiUrl..."
 try {
-    Invoke-WebRequest -Uri $installerUrl -OutFile $tempInstaller -UseBasicParsing -ErrorAction Stop
-    Write-Info "Downloaded Wazuh Agent installer to $tempInstaller"
+    Invoke-WebRequest -Uri $msiUrl -OutFile $msiPath -UseBasicParsing -ErrorAction Stop
+    Write-Host "Downloaded: $msiPath"
 } catch {
-    Write-Warn "Failed to download Wazuh Agent installer: $_"
+    Write-Error "Failed to download Wazuh MSI: $_"
+    exit 1
 }
 
-Write-Info "Installing Wazuh Agent silently..."
+# Install the Wazuh agent silently
+Write-Host "Installing Wazuh Agent silently..."
 try {
-    Start-Process msiexec.exe -ArgumentList "/i `"$tempInstaller`"", "/qn", "/norestart" -Wait -ErrorAction Stop
-    Write-Info "Wazuh Agent installed successfully."
+    $proc = Start-Process -FilePath msiexec.exe -ArgumentList '/i', $msiPath, '/qn', "WAZUH_MANAGER=$managerIP" `
+            -Wait -PassThru -NoNewWindow
+    if ($proc.ExitCode -ne 0) {
+        Write-Error "Wazuh agent installation failed (exit code $($proc.ExitCode))."
+        exit 1
+    }
 } catch {
-    Write-Warn "Wazuh Agent installation failed: $_"
+    Write-Error "Installation error: $_"
+    exit 1
+}
+Write-Host "Wazuh Agent installed successfully."
+
+# Determine installation directory (64-bit vs 32-bit Windows)
+if (Test-Path "$($env:ProgramFiles(x86))\ossec-agent") {
+    $installDir = "$($env:ProgramFiles(x86))\ossec-agent"
+} elseif (Test-Path "$($env:ProgramFiles)\ossec-agent") {
+    $installDir = "$($env:ProgramFiles)\ossec-agent"
+} else {
+    Write-Error "Wazuh installation directory not found."
+    exit 1
+}
+Write-Host "Wazuh Agent directory: $installDir"
+
+# Stop the Wazuh service before updating config
+Write-Host "Stopping Wazuh service..."
+try {
+    Stop-Service -Name WazuhSvc -ErrorAction Stop
+} catch {
+    Write-Warning "Wazuh service may not be running: $_"
 }
 
-# 2. Replace default ossec.conf with custom configuration
-Write-Info "Applying custom ossec.conf configuration..."
-$installPath = ""
-if (Test-Path "$env:ProgramFiles(x86)\ossec-agent\ossec.conf") {
-    $installPath = "$env:ProgramFiles(x86)\ossec-agent"
-} elseif (Test-Path "$env:ProgramFiles\ossec-agent\ossec.conf") {
-    $installPath = "$env:ProgramFiles\ossec-agent"
+# Download and replace ossec.conf
+$confUrl = "https://raw.githubusercontent.com/effaaykhan/SOC-Files/main/Wazuh/windows-agent.conf"
+$confPath = Join-Path $env:TEMP "windows-agent.conf"
+Write-Host "Downloading replacement ossec.conf..."
+try {
+    Invoke-WebRequest -Uri $confUrl -OutFile $confPath -UseBasicParsing -ErrorAction Stop
+} catch {
+    Write-Error "Failed to download custom config: $_"
+    exit 1
 }
-if ($installPath) {
-    $ossecConf = Join-Path $installPath "ossec.conf"
-    $customConfUrl = "https://raw.githubusercontent.com/effaaykhan/SOC-Files/main/Wazuh/windows-agent.conf"
-    try {
-        if (Test-Path $ossecConf) {
-            Remove-Item $ossecConf -Force
+
+try {
+    $destConf = Join-Path $installDir "ossec.conf"
+    if (Test-Path $destConf) {
+        Rename-Item -Path $destConf -NewName "ossec.conf.bak" -Force
+        Write-Host "Backed up original ossec.conf to ossec.conf.bak"
+    }
+    Copy-Item -Path $confPath -Destination $destConf -Force
+    Write-Host "Replaced ossec.conf with custom configuration."
+} catch {
+    Write-Error "Failed to replace ossec.conf: $_"
+    exit 1
+}
+
+# Update registry uninstall DisplayName to "Cybersentinel Agent"
+try {
+    $key32 = "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\OSSEC"
+    $key64 = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OSSEC"
+    if (Test-Path $key32) { $regPath = $key32 }
+    elseif (Test-Path $key64) { $regPath = $key64 }
+    else { $regPath = $null }
+    if ($regPath) {
+        Set-ItemProperty -Path $regPath -Name "DisplayName" -Value "Cybersentinel Agent"
+        Write-Host "Registry DisplayName updated to Cybersentinel Agent."
+    } else {
+        Write-Warning "Uninstall registry key not found; skipping DisplayName update."
+    }
+} catch {
+    Write-Error "Failed to update registry: $_"
+    exit 1
+}
+
+# Rename desktop and Start Menu shortcuts from "Wazuh Agent" to "Cybersentinel Agent"
+Write-Host "Renaming shortcuts..."
+$paths = @(
+    [Environment]::GetFolderPath("CommonDesktopDirectory"),
+    [Environment]::GetFolderPath("Desktop"),
+    [Environment]::GetFolderPath("CommonPrograms"),
+    [Environment]::GetFolderPath("Programs")
+)
+foreach ($path in $paths) {
+    if (Test-Path $path) {
+        Get-ChildItem -Path $path -Recurse -Filter "*.lnk" -ErrorAction SilentlyContinue `
+            | Where-Object { $_.Name -like "*Wazuh Agent*" } | ForEach-Object {
+                $newName = $_.Name -replace "Wazuh Agent", "Cybersentinel Agent"
+                Rename-Item -Path $_.FullName -NewName $newName -Force
+                Write-Host "Renamed shortcut $($_.Name) to $newName"
         }
-        Invoke-WebRequest -Uri $customConfUrl -OutFile $ossecConf -UseBasicParsing -ErrorAction Stop
-        Write-Info "ossec.conf replaced with custom configuration."
-    } catch {
-        Write-Warn "Failed to apply custom ossec.conf: $_"
     }
-} else {
-    Write-Warn "Wazuh Agent installation directory not found. Skipping ossec.conf replacement."
 }
 
-# 3. Change the service display name to "CyberSentinel Agent"
-Write-Info "Updating Windows service display name..."
-$serviceName = "WazuhSvc"
+# Rename any Start Menu folders named "Wazuh Agent"
+foreach ($path in $paths) {
+    if (Test-Path $path) {
+        Get-ChildItem -Path $path -Recurse -Directory -ErrorAction SilentlyContinue `
+            | Where-Object { $_.Name -like "*Wazuh Agent*" } | ForEach-Object {
+                $newName = $_.Name -replace "Wazuh Agent", "Cybersentinel Agent"
+                Rename-Item -Path $_.FullName -NewName $newName -Force
+                Write-Host "Renamed folder $($_.Name) to $newName"
+        }
+    }
+}
+
+# Start the Wazuh (Cybersentinel) service
+Write-Host "Starting Wazuh service..."
 try {
-    Set-Service -Name $serviceName -DisplayName "CyberSentinel Agent" -ErrorAction Stop
-    Write-Info "Service display name updated to 'CyberSentinel Agent'."
+    Start-Service -Name WazuhSvc -ErrorAction Stop
+    Write-Host "Wazuh service started."
 } catch {
-    Write-Warn "Service '$serviceName' not found or display name could not be changed: $_"
+    Write-Error "Failed to start Wazuh service: $_"
+    exit 1
 }
 
-# 4. Rename Start Menu folder and desktop shortcut
-Write-Info "Renaming Start Menu and Desktop shortcuts..."
-$programsPath = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs"
-$wazuhFolder = Join-Path $programsPath "Wazuh Agent"
-if (Test-Path $wazuhFolder) {
-    try {
-        Rename-Item -Path $wazuhFolder -NewName "CyberSentinel Agent"
-        Write-Info "Start Menu folder renamed to 'CyberSentinel Agent'."
-    } catch {
-        Write-Warn "Failed to rename Start Menu folder: $_"
+# Verify service status
+try {
+    $svc = Get-Service -Name WazuhSvc
+    if ($svc.Status -eq "Running") {
+        Write-Host "Cybersentinel (Wazuh) service is running."
+    } else {
+        Write-Warning "Cybersentinel (Wazuh) service is installed but not running."
     }
-} else {
-    Write-Warn "Start Menu folder 'Wazuh Agent' not found."
+} catch {
+    Write-Warning "Could not find the Wazuh service to verify status."
 }
-
-# Public Desktop shortcut
-$publicDesktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
-$shortcutPath = Join-Path $publicDesktop "Wazuh Agent.lnk"
-if (Test-Path $shortcutPath) {
-    try {
-        Rename-Item -Path $shortcutPath -NewName "CyberSentinel Agent.lnk"
-        Write-Info "Public desktop shortcut renamed to 'CyberSentinel Agent.lnk'."
-    } catch {
-        Write-Warn "Failed to rename public desktop shortcut: $_"
-    }
-} else {
-    Write-Warn "Public desktop shortcut 'Wazuh Agent.lnk' not found."
-}
-
-# Current user Desktop shortcut
-$userDesktop = [Environment]::GetFolderPath("Desktop")
-$shortcutPathUser = Join-Path $userDesktop "Wazuh Agent.lnk"
-if (Test-Path $shortcutPathUser) {
-    try {
-        Rename-Item -Path $shortcutPathUser -NewName "CyberSentinel Agent.lnk"
-        Write-Info "User desktop shortcut renamed to 'CyberSentinel Agent.lnk'."
-    } catch {
-        Write-Warn "Failed to rename user desktop shortcut: $_"
-    }
-} else {
-    Write-Warn "User desktop shortcut 'Wazuh Agent.lnk' not found."
-}
-
-Write-Info "Rebranding complete."
