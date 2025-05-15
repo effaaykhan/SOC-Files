@@ -1,108 +1,156 @@
-# Fixed CyberSentinel agent installation script
-[CmdletBinding()]
-param()
-
+# Set strict error handling
 $ErrorActionPreference = 'Stop'
 
-try {
-    # Ensure script is run as Administrator
-    $user = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = New-Object Security.Principal.WindowsPrincipal($user)
-    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        throw "Administrator privileges are required to run this script."
-    }
+# Display ASCII art banner
+Write-Host ""
+Write-Host "#####  #     # #######    #####  #     #  #####  #  ####  #####  #  ####  "
+Write-Host "#     # #   #   #      #     # #     # #     # # #    # #    # # #      "
+Write-Host "#       # #    #      #       #     # #     # # #      #    # # #      "
+Write-Host "#  ####  #     #      #       #######  #     # # #      #   #  #  #####  "
+Write-Host "#     # #     #      #       #     #  #     # # #      #    # #       # "
+Write-Host "#     # #     #      #     # #     #  #     # # #    # #    # # #     # "
+Write-Host "#####   #####    ####  ####### #     #  #####  #  ####  #####  #  #####  "
+Write-Host ""
+Write-Host "#####     #####  #######  #####     #####  #     #  #####  #####  #     #  #####  "
+Write-Host "#    #   #     # #       #     #   #     # #     # #     #   #   #     # #     # "
+Write-Host "#    #   #       #       #         #       #     # #         #   #     # #       "
+Write-Host "#####    #  #### #####    #####    #       #     # #  ####   #   #     # #  ####  "
+Write-Host "#   #    #     # #             #   #       #     # #     #   #   #     # #     # "
+Write-Host "#    #   #     # #       #     #   #     # #     # #     #   #   #     # #     # "
+Write-Host "#####     #####  #######  #####     #####   #####   #####    #    #####   #####  "
+Write-Host ""
 
-    Write-Host "Installing CyberSentinel Agent..."
+# Define variables
+$agentUrl  = "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.11.2-1.msi"
+$agentFile = "$env:TEMP\CyberSentinelAgent.msi"
+$oldSvcName = "WazuhSvc"
+$newSvcName = "CyberSentinelSvc"
+$displayName = "CyberSentinel Agent"
+$ossecDir = Join-Path ([Environment]::GetFolderPath("ProgramFilesX86")) "ossec-agent"
+$confUrl  = "https://raw.githubusercontent.com/effaaykhan/SOC-Files/main/Wazuh/windows-agent.conf"
+$confFile = Join-Path $ossecDir "ossec.conf"
+$script1Url  = "https://raw.githubusercontent.com/effaaykhan/VirusTotal-Integration-with-Wazuh/main/remove-threat.py"
+$script2Url  = "https://raw.githubusercontent.com/effaaykhan/VirusTotal-Integration-with-Wazuh/main/remove-malware.py"
+$script1File = "$env:TEMP\remove-threat.py"
+$script2File = "$env:TEMP\remove-malware.py"
+$pythonUrl  = "https://www.python.org/ftp/python/3.13.3/python-3.13.3-amd64.exe"
+$pythonFile = "$env:TEMP\python-3.13.3-amd64.exe"
+$binDir  = Join-Path $ossecDir "active-response\bin"
 
-    # Variables (replace <URL> placeholders with actual URLs)
-    $tempDir = Join-Path $env:TEMP "CyberSentinelAgent"
-    $agentMsiUrl = "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.11.2-1.msi"
-    $agentMsiPath = Join-Path $tempDir "cybersentinel-agent.msi"
-    $pythonInstallerUrl = "https://www.python.org/downloads/release/python-3133/"
-    $pythonInstallerPath = Join-Path $tempDir "python-installer.exe"
-    $ossecConfigUrl = "https://github.com/effaaykhan/SOC-Files/blob/main/Wazuh/windows-agent.conf"
-    # Determine agent installation path (Wazuh default)
-    if ([Environment]::Is64BitProcess) {
-        $agentPath = "${env:ProgramFiles(x86)}\ossec-agent"
-    } else {
-        $agentPath = "${env:ProgramFiles}\ossec-agent"
-    }
+# Download CyberSentinel Agent MSI
+Write-Host "Downloading CyberSentinel Agent MSI..." -ForegroundColor Cyan
+Invoke-WebRequest -Uri $agentUrl -OutFile $agentFile
 
-    # Create temporary folder
-    if (Test-Path $tempDir) { Remove-Item -Path $tempDir -Recurse -Force }
-    New-Item -Path $tempDir -ItemType Directory | Out-Null
-
-    # Download and install the CyberSentinel (Wazuh) agent silently
-    Write-Host "Downloading CyberSentinel agent..."
-    Invoke-WebRequest -Uri $agentMsiUrl -OutFile $agentMsiPath -UseBasicParsing
-    Start-Process msiexec.exe -ArgumentList "/i `"$agentMsiPath`" /quiet /norestart" -Wait
-
-    # Rename the service to CyberSentinelSvc
-    if (Get-Service -Name "WazuhSvc" -ErrorAction SilentlyContinue) {
-        Stop-Service -Name "WazuhSvc" -Force -ErrorAction SilentlyContinue
-        $oldKey = "HKLM:\SYSTEM\CurrentControlSet\Services\WazuhSvc"
-        $binPath = (Get-ItemProperty -Path $oldKey -Name ImagePath).ImagePath
-        $startType = (Get-ItemProperty -Path $oldKey -Name Start).Start
-        # Create new service with the same executable
-        sc.exe create CyberSentinelSvc binPath= "\"$binPath\"" start= $startType DisplayName= "CyberSentinel Agent" | Out-Null
-        sc.exe description CyberSentinelSvc "CyberSentinel Agent Service" | Out-Null
-        sc.exe delete WazuhSvc | Out-Null
-    }
-    Set-Service -Name CyberSentinelSvc -StartupType Automatic
-
-    # Download and apply custom ossec.conf (if provided)
-    Write-Host "Applying custom ossec.conf..."
-    if ($ossecConfigUrl) {
-        $configPath = Join-Path $agentPath "ossec.conf"
-        Invoke-WebRequest -Uri $ossecConfigUrl -OutFile $configPath -UseBasicParsing
-    }
-
-    # Install Python if not already installed
-    if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-        Write-Host "Installing Python..."
-        Invoke-WebRequest -Uri $pythonInstallerUrl -OutFile $pythonInstallerPath -UseBasicParsing
-        Start-Process -FilePath $pythonInstallerPath -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1" -Wait
-    }
-
-    # Build active-response executables using PyInstaller
-    Write-Host "Building executables from Python scripts..."
-    $activeRespZip = Join-Path $tempDir "active-response.zip"
-    $activeRespDir = Join-Path $tempDir "active-response"
-    # Download the active-response scripts (replace with actual URL)
-    Invoke-WebRequest -Uri "https://github.com/effaaykhan/VirusTotal-Integration-with-Wazuh/blob/main/remove-malware.py" -OutFile $activeRespZip -UseBasicParsing
-    Expand-Archive -LiteralPath $activeRespZip -DestinationPath $activeRespDir -Force
-
-    # Install PyInstaller via pip
-    python -m pip install --upgrade pip | Out-Null
-    python -m pip install pyinstaller | Out-Null
-
-    # Compile each .py script to .exe
-    Push-Location $activeRespDir
-    $distDir = Join-Path $activeRespDir "dist"
-    if (Test-Path $distDir) { Remove-Item -Recurse -Force $distDir }
-    Get-ChildItem -Path $activeRespDir -Filter "*.py" | ForEach-Object {
-        python -m PyInstaller --noconfirm --onefile $_.FullName | Out-Null
-    }
-    Pop-Location
-
-    # Copy compiled executables to the agent's Active-Response\bin folder
-    Write-Host "Deploying active-response executables..."
-    $binDir = Join-Path $agentPath "Active-Response\bin"
-    if (-not (Test-Path $binDir)) { New-Item -ItemType Directory -Path $binDir | Out-Null }
-    Get-ChildItem -Path (Join-Path $activeRespDir "dist") -Filter "*.exe" | ForEach-Object {
-        Copy-Item -Path $_.FullName -Destination $binDir -Force
-    }
-
-    # Restart the CyberSentinel service
-    Write-Host "Restarting CyberSentinel service..."
-    Restart-Service -Name CyberSentinelSvc -Force
-
-    # Cleanup temp files
-    Remove-Item -Path $tempDir -Recurse -Force
-    Write-Host "CyberSentinel agent installation and configuration complete."
-    exit 0
+If (!(Test-Path $agentFile)) {
+    Write-Error "Download failed. Exiting."
+    Exit 1
 }
-catch {
-    Write-Error "Installation failed: $_"
-    exit 1
+
+# Install Agent Silently
+Write-Host "Installing CyberSentinel Agent..." -ForegroundColor Cyan
+Start-Process -FilePath msiexec.exe `
+    -ArgumentList "/i `"$agentFile`" /qn /norestart" `
+    -Wait -NoNewWindow
+
+If ($LASTEXITCODE -ne 0) {
+    Write-Error "Installation failed with exit code $LASTEXITCODE."
+    Exit 1
 }
+Write-Host "CyberSentinel Agent installed successfully." -ForegroundColor Green
+
+# Wait for WazuhSvc to appear
+Write-Host "Waiting for WazuhSvc service to appear..." -ForegroundColor Cyan
+$maxRetries = 30
+$retryCount = 0
+while (-not (Get-Service -Name $oldSvcName -ErrorAction SilentlyContinue)) {
+    Start-Sleep -Seconds 5
+    $retryCount++
+    if ($retryCount -ge $maxRetries) {
+        Write-Error "WazuhSvc service did not appear after $($maxRetries * 5) seconds. Exiting."
+        Exit 1
+    }
+}
+Write-Host "WazuhSvc detected. Proceeding with rename..." -ForegroundColor Green
+
+# Stop WazuhSvc
+Stop-Service -Name $oldSvcName -Force -ErrorAction SilentlyContinue
+
+# Get WazuhSvc binary path from registry
+$svcKey = "HKLM:\SYSTEM\CurrentControlSet\Services\$oldSvcName"
+$binPath = (Get-ItemProperty $svcKey -Name ImagePath).ImagePath
+
+# Create new service CyberSentinelSvc
+New-Service -Name $newSvcName `
+            -BinaryPathName $binPath `
+            -DisplayName $displayName `
+            -StartupType Automatic
+
+# Delete old WazuhSvc
+sc.exe delete $oldSvcName
+Write-Host "Service renamed: $oldSvcName ➔ $newSvcName (Display Name: $displayName)." -ForegroundColor Green
+
+# Apply Configuration
+Write-Host "Applying custom configuration..." -ForegroundColor Cyan
+Invoke-WebRequest -Uri $confUrl -OutFile $confFile -UseBasicParsing
+Write-Host "Configuration file applied: $confFile" -ForegroundColor Green
+
+# Install Python if missing
+Write-Host "Checking for Python..." -ForegroundColor Cyan
+if (!(Get-Command python.exe -ErrorAction SilentlyContinue)) {
+    Write-Host "Python not found. Installing Python 3.13.3..." -ForegroundColor Cyan
+    Invoke-WebRequest -Uri $pythonUrl -OutFile $pythonFile
+
+    Start-Process -FilePath $pythonFile `
+        -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1" `
+        -Wait -NoNewWindow
+
+    Remove-Item $pythonFile
+    Write-Host "Python 3.13.3 installed successfully." -ForegroundColor Green
+} else {
+    Write-Host "Python is already installed. Skipping installation." -ForegroundColor Green
+}
+
+# Install PyInstaller
+Write-Host "Installing/upgrading PyInstaller..." -ForegroundColor Cyan
+python -m pip install --upgrade pip
+python -m pip install pyinstaller
+Write-Host "PyInstaller is ready." -ForegroundColor Green
+
+# Download & Compile Active-Response Scripts
+Write-Host "Downloading active-response scripts..." -ForegroundColor Cyan
+Invoke-WebRequest -Uri $script1Url -OutFile $script1File
+Invoke-WebRequest -Uri $script2Url -OutFile $script2File
+
+Write-Host "Compiling scripts with PyInstaller..." -ForegroundColor Cyan
+Push-Location $env:TEMP
+python -m PyInstaller -F $script1File
+python -m PyInstaller -F $script2File
+Pop-Location
+
+# Move Executables
+$srcExe1 = Join-Path "$env:TEMP\dist" "remove-threat.exe"
+$srcExe2 = Join-Path "$env:TEMP\dist" "remove-malware.exe"
+
+Move-Item $srcExe1 $binDir
+Move-Item $srcExe2 $binDir
+Write-Host "Active-response executables deployed to $binDir" -ForegroundColor Green
+
+# Restart Service
+Write-Host "Restarting CyberSentinel service..." -ForegroundColor Cyan
+Restart-Service -Name $newSvcName -Force
+Write-Host "Service $newSvcName restarted." -ForegroundColor Green
+
+# Verify
+If (Test-Path (Join-Path $binDir "remove-threat.exe") -and `
+    Test-Path (Join-Path $binDir "remove-malware.exe")) {
+    Write-Host "Active-response executables verified in bin directory." -ForegroundColor Green
+} else {
+    Write-Error "ERROR: Active-response executables are missing!" 
+    Exit 1
+}
+
+# Clean up
+Write-Host "Cleaning up temporary files..." -ForegroundColor Cyan
+Remove-Item "$env:TEMP\dist","$env:TEMP\build" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item $script1File,$script2File,$agentFile -Force -ErrorAction SilentlyContinue
+Write-Host "Cleanup complete. Deployment finished successfully!" -ForegroundColor Green
