@@ -1,135 +1,169 @@
-# PowerShell script to install CyberSentinel (Wazuh-based) Agent on Windows
-# Requirements:
-# - Run as Administrator
-# - Ensure execution policy allows running scripts or sign this script.
-
-# Define variables
-$wazuhManager = "192.168.1.69"  # Wazuh manager IP
-$installerUrl = "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.12.0-1.msi"  # URL to Wazuh agent installer (update if necessary)
-$customConfigUrl = "https://raw.githubusercontent.com/effaaykhan/SOC-Files/main/Wazuh/windows-agent.conf"  # URL to custom Wazuh agent config
-$logFile = Join-Path $env:TEMP "CyberSentinelInstall.log"
-
-# Function to log messages with timestamp
-function Write-Log {
-    param([string]$message)
-    $timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-    $logEntry = "${timestamp} - ${message}"
-    Write-Host $logEntry
-    Add-Content -Path $logFile -Value $logEntry
-}
-
-# Remove existing log file if present
-if (Test-Path $logFile) {
-    Remove-Item $logFile -Force
-}
-
-# Check for administrative privileges
-$currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
-$principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
-if (-not $principal.IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) {
-    Write-Log "ERROR: Script is not running as Administrator. Exiting."
+# Ensure the script is running as Administrator
+If (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) {
+    Write-Error "This script must be run as Administrator."
     exit 1
 }
 
-Write-Log "Starting CyberSentinel (Wazuh agent) installation..."
+# Define original and new service names
+$oldNames = @("WazuhSvc","Wazuh")      # Possible Wazuh service names
+$newName   = "CyberSentinelAgent"      # New service name
+$newDisplay= "CyberSentinel Agent"     # New display name in Services
 
-# Download the Wazuh agent installer
-$installerPath = Join-Path $env:TEMP "wazuh-agent.msi"
-try {
-    Write-Log "Downloading Wazuh agent installer from $installerUrl..."
-    Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath -UseBasicParsing
-    Write-Log "Downloaded Wazuh agent installer to $installerPath."
-} catch {
-    Write-Log "ERROR: Failed to download Wazuh agent installer. $_"
+# Find the existing Wazuh service (if installed)
+$oldService = $null
+foreach ($nm in $oldNames) {
+    try {
+        $svcTemp = Get-Service -Name $nm -ErrorAction Stop
+        $oldService = $svcTemp
+        break
+    } catch {
+        # Try next name if not found
+    }
+}
+if (-not $oldService) {
+    Write-Error "Original Wazuh service not found. Ensure Wazuh Agent is installed."
+    exit 1
+}
+$oldName = $oldService.Name
+Write-Host "Found Wazuh service: Name='$oldName', DisplayName='$($oldService.DisplayName)'."
+
+# Retrieve current configuration for the Wazuh service
+$wmiSvc = Get-CimInstance -ClassName Win32_Service -Filter "Name='$oldName'"
+if (-not $wmiSvc) {
+    Write-Error "Failed to retrieve service configuration for $oldName."
     exit 1
 }
 
-# Install the Wazuh agent silently
-try {
-    Write-Log "Installing Wazuh agent silently..."
-    $msiArgs = "/i `"$installerPath`" /qn WAZUH_MANAGER=`"$wazuhManager`""
-    Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -Wait -NoNewWindow
-    Write-Log "Wazuh agent installation completed."
-} catch {
-    Write-Log "ERROR: Wazuh agent installation failed. $_"
-    exit 1
+# Prepare parameters for the new service (clone with same settings)
+$binPath = $wmiSvc.PathName
+# Remove enclosing quotes if present (New-Service will handle quoting)
+if ($binPath.StartsWith('"') -and $binPath.EndsWith('"')) {
+    $binPath = $binPath.Trim('"')
 }
 
-# Determine Wazuh agent installation directory based on architecture
-if (Test-Path "$env:ProgramFiles (x86)\ossec-agent") {
-    $installDir = "$env:ProgramFiles (x86)\ossec-agent"
-} elseif (Test-Path "$env:ProgramFiles\ossec-agent") {
-    $installDir = "$env:ProgramFiles\ossec-agent"
+# Determine startup type (Auto, Manual, Disabled)
+switch ($wmiSvc.StartMode.ToLower()) {
+    "auto"     { $startupType = "Automatic" }
+    "manual"   { $startupType = "Manual" }
+    "disabled" { $startupType = "Disabled" }
+    default    { $startupType = "Automatic" }
+}
+
+# Determine service account credentials if needed (LocalSystem, LocalService, NetworkService)
+$svcAccount = $wmiSvc.StartName
+$cred = $null
+if ($svcAccount -match "LocalService") {
+    $cred = New-Object System.Management.Automation.PSCredential("NT AUTHORITY\LocalService",(ConvertTo-SecureString '' -AsPlainText -Force))
+} elseif ($svcAccount -match "NetworkService") {
+    $cred = New-Object System.Management.Automation.PSCredential("NT AUTHORITY\NetworkService",(ConvertTo-SecureString '' -AsPlainText -Force))
+} elseif ($svcAccount -like "*LocalSystem") {
+    # LocalSystem account does not require explicit credentials
+    $cred = $null
 } else {
-    Write-Log "ERROR: Wazuh agent installation directory not found."
+    Write-Host "Service runs under '$svcAccount'. Manual credential entry may be required."
+    $cred = $null
+}
+
+# Stop the original Wazuh service if it's running
+if ($oldService.Status -eq 'Running') {
+    Write-Host "Stopping original service '$oldName'..."
+    Stop-Service -Name $oldName -Force
+}
+
+# Create the cloned service with the new name and same configuration
+Write-Host "Creating cloned service '$newName'..."
+$params = @{
+    Name           = $newName
+    BinaryPathName = $binPath
+    DisplayName    = $newDisplay
+    StartupType    = $startupType
+}
+# Copy description if it exists
+if ($wmiSvc.Description) {
+    $params["Description"] = $wmiSvc.Description
+}
+# Copy any dependencies
+if ($wmiSvc.Dependencies) {
+    $params["DependsOn"] = $wmiSvc.Dependencies
+}
+# Include credentials if using LocalService or NetworkService
+if ($cred) {
+    $params["Credential"] = $cred
+}
+try {
+    New-Service @params
+    Write-Host "Service '$newName' created successfully."
+} catch {
+    Write-Error "Failed to create service '$newName': $_"
     exit 1
 }
 
-# Replace the default configuration with custom config
-$agentConfigPath = Join-Path $installDir "ossec.conf"
-if (Test-Path $agentConfigPath) {
-    # Backup original config
-    Copy-Item -Path $agentConfigPath -Destination "${agentConfigPath}.bak" -Force
-    Write-Log "Backed up original config to ${agentConfigPath}.bak"
-}
-try {
-    Write-Log "Downloading custom agent config from $customConfigUrl..."
-    Invoke-WebRequest -Uri $customConfigUrl -OutFile "$env:TEMP\windows-agent.conf" -UseBasicParsing
-    Move-Item -Path "$env:TEMP\windows-agent.conf" -Destination $agentConfigPath -Force
-    Write-Log "Replaced agent configuration with custom config."
-} catch {
-    Write-Log "ERROR: Failed to download or replace agent config. $_"
-    exit 1
-}
+# Start the new CyberSentinel service
+Write-Host "Starting new service '$newName'..."
+Start-Service -Name $newName
 
-# Apply required audit policy settings
-Write-Log "Applying audit policy settings..."
-try {
-    & auditpol /set /subcategory:"Removable Storage" /success:enable /failure:enable
-    & auditpol /set /subcategory:"Plug and Play Events" /success:enable /failure:enable
-    & auditpol /set /subcategory:"File System" /success:enable /failure:enable
-    & wevtutil set-log "Microsoft-Windows-DriverFrameworks-UserMode/Operational" /enabled:true
-    Write-Log "Audit policy settings applied successfully."
-} catch {
-    Write-Log "ERROR: Failed to apply some audit policy settings. $_"
-}
-
-# Rename the Wazuh agent service display name without creating a new service
-Write-Log "Renaming Wazuh agent service display name to 'CyberSentinel Agent'..."
-try {
-    $svc = Get-WmiObject -Class Win32_Service -Filter "Name='WazuhSvc'"
-    if ($svc) {
-        $result = $svc.Change("CyberSentinel Agent", $svc.PathName, [uint32]$svc.ServiceType, [uint32]$svc.ErrorControl, $svc.StartMode, $svc.DesktopInteract, $svc.StartName, $svc.StartPassword, $svc.LoadOrderGroup, $svc.LoadOrderGroupDependencies, $svc.ServiceDependencies)
-        if ($result.ReturnValue -eq 0) {
-            Write-Log "Service display name changed successfully."
-        } else {
-            Write-Log "WARNING: Could not change service display name. WMI return code: $($result.ReturnValue)"
-        }
-    } else {
-        Write-Log "WARNING: Wazuh service not found. Skipping display name change."
-    }
-} catch {
-    Write-Log "ERROR: Exception while renaming service display name. $_"
-}
-
-# Validate that the agent service is installed and running
-Write-Log "Validating Wazuh agent service status..."
-try {
-    $service = Get-Service -Name WazuhSvc -ErrorAction Stop
-    if ($service.Status -eq 'Running') {
-        Write-Log "Wazuh agent service is running."
-    } else {
-        Write-Log "Wazuh agent service is installed but not running. Attempting to start it..."
-        Start-Service -Name WazuhSvc
-        Start-Sleep -Seconds 5
-        if ((Get-Service -Name WazuhSvc).Status -eq 'Running') {
-            Write-Log "Wazuh agent service started successfully."
-        } else {
-            Write-Log "ERROR: Failed to start Wazuh agent service."
+# Update registry uninstall entries: replace 'Wazuh' with 'CyberSentinel' in DisplayName
+$uninstallPaths = @(
+    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+)
+foreach ($path in $uninstallPaths) {
+    if (Test-Path $path) {
+        Get-ChildItem $path | ForEach-Object {
+            try {
+                $disp = (Get-ItemProperty $_.PSPath -Name "DisplayName" -ErrorAction Stop).DisplayName
+            } catch { return }
+            if ($disp -match "Wazuh") {
+                $newDisp = $disp -replace "Wazuh","CyberSentinel"
+                Write-Host "Updating registry DisplayName: '$disp' -> '$newDisp' in $($_.PSPath)"
+                Set-ItemProperty -Path $_.PSPath -Name "DisplayName" -Value $newDisp
+            }
         }
     }
-} catch {
-    Write-Log "ERROR: Wazuh agent service is not installed or cannot be accessed. $_"
 }
 
-Write-Log "CyberSentinel agent installation and configuration completed."
+# Update shortcuts (Start Menu / Desktop) containing 'Wazuh' to 'CyberSentinel'
+$wshell = New-Object -ComObject WScript.Shell
+$folders = @(
+    [Environment]::GetFolderPath("CommonPrograms"),
+    [Environment]::GetFolderPath("Programs"),
+    [Environment]::GetFolderPath("CommonDesktopDirectory"),
+    [Environment]::GetFolderPath("Desktop")
+)
+foreach ($folder in $folders) {
+    if (-not [string]::IsNullOrEmpty($folder) -and (Test-Path $folder)) {
+        Get-ChildItem -Path $folder -Recurse -Include *.lnk -ErrorAction SilentlyContinue | ForEach-Object {
+            $lnkPath    = $_.FullName
+            $lnkPathNew = $lnkPath
+            # Rename shortcut file if it contains 'Wazuh'
+            if ($lnkPath -match "Wazuh") {
+                $lnkPathNew = $lnkPath -replace "Wazuh","CyberSentinel"
+                try {
+                    Move-Item -Path $lnkPath -Destination $lnkPathNew -Force
+                    Write-Host "Renamed shortcut: '$lnkPath' -> '$lnkPathNew'"
+                } catch {
+                    Write-Host "Failed to rename shortcut '$lnkPath'"
+                }
+            }
+            # Update the shortcut's description if needed
+            if (Test-Path $lnkPathNew) {
+                $shortcut = $wshell.CreateShortcut($lnkPathNew)
+                if ($shortcut.Description -and $shortcut.Description -match "Wazuh") {
+                    $shortcut.Description = $shortcut.Description -replace "Wazuh","CyberSentinel"
+                    $shortcut.Save()
+                    Write-Host "Updated shortcut description in '$lnkPathNew'."
+                }
+            }
+        }
+    }
+}
+
+# Delete the original Wazuh service now that the new one is running
+$svcNew = Get-Service -Name $newName
+if ($svcNew.Status -eq 'Running') {
+    Write-Host "Deleting original service '$oldName'..."
+    sc.exe delete $oldName | Out-Null
+    Write-Host "Original service '$oldName' deleted."
+} else {
+    Write-Error "New service '$newName' is not running. Original service not deleted."
+}
