@@ -9,7 +9,8 @@ $wazuhManager = "192.168.1.69"
 Invoke-WebRequest -Uri $agentUrl -OutFile $agentInstaller
 
 # Install Wazuh Agent silently and point to your SIEM
-Start-Process msiexec.exe -Wait -ArgumentList "/i `"$agentInstaller`" /q WAZUH_MANAGER='$wazuhManager'"
+Start-Process msiexec.exe 
+#-Wait -ArgumentList "/i `"$agentInstaller`" /q WAZUH_MANAGER='$wazuhManager'"
 
 # Wait for install to complete and service to be installed
 Start-Sleep -Seconds 10
@@ -21,6 +22,6 @@ Invoke-WebRequest -Uri $configUrl -OutFile $configDest
 icacls $configDest /grant "NT AUTHORITY\SYSTEM:F" /T
 
 # Restart Wazuh Agent service
-Restart-Service -Name "WazuhAgent"
+Restart-Service -Name "WazuhSvc"
 
 Write-Host "CyberSentinel Agent installed and configured successfully."
