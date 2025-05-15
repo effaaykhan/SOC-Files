@@ -1,57 +1,49 @@
-Write-Host "Installing CyberSentinel Agent..." -ForegroundColor Cyan
+# Define variables
+$AgentUrl = "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.11.2-1.msi"
+$AgentInstaller = "$env:TEMP\wazuh-agent.msi"
+$ManagerIP = "192.168.1.69"
+$ConfigUrl = "https://raw.githubusercontent.com/effaaykhan/SOC-Files/main/Wazuh/windows-agent.conf"
+$ConfigDestination = "C:\Program Files (x86)\ossec-agent\ossec.conf"
+$DisplayServiceName = "CyberSentinel Agent"
+$NewServiceDisplayName = "CyberSentinel Agent"
 
-# Variables
-$agentUrl = "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.11.2-1.msi"   # REPLACE this with your actual agent archive URL
-$tempZip = Join-Path $env:TEMP "cybersentinel-agent.zip"
-$installDir = Join-Path $PSScriptRoot "bin"
-$oldAgentExe = "agent.exe"              # original agent exe name inside the zip
-$newAgentExe = "cybersentinel.exe"
-$serviceName = "CyberSentinel"
+# Step 1: Download and Install Wazuh Agent
+Invoke-WebRequest -Uri $AgentUrl -OutFile $AgentInstaller
+Start-Process "msiexec.exe" -ArgumentList "/i `"$AgentInstaller`" /q WAZUH_MANAGER='$ManagerIP'" -Wait
 
-# Download agent zip
-Write-Host "Downloading CyberSentinel agent..." -ForegroundColor Cyan
-Invoke-WebRequest -Uri $agentUrl -OutFile $tempZip
+# Step 2: Stop the agent service before replacing config
+Stop-Service -Name "WazuhSvc" -Force
 
-# Create install directory if missing
-if (-not (Test-Path $installDir)) {
-    New-Item -Path $installDir -ItemType Directory | Out-Null
+# Step 3: Download and Replace ossec.conf with custom version
+Invoke-WebRequest -Uri $ConfigUrl -OutFile $ConfigDestination -UseBasicParsing
+
+# Step 4: Change the display name of the service
+Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\WazuhSvc" -Name "DisplayName" -Value $NewServiceDisplayName
+
+# Step 5: Optional Cosmetic Changes
+# Rename Program Group (Start Menu) if it exists
+$programGroup = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Wazuh Agent"
+if (Test-Path $programGroup) {
+    Rename-Item -Path $programGroup -NewName "CyberSentinel Agent"
 }
 
-# Extract agent archive
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-[System.IO.Compression.ZipFile]::ExtractToDirectory($tempZip, $installDir)
-
-# Delete zip file
-Remove-Item $tempZip -Force
-
-# Rename agent executable if exists
-$oldExePath = Join-Path $installDir $oldAgentExe
-$newExePath = Join-Path $installDir $newAgentExe
-if (Test-Path $oldExePath) {
-    Rename-Item -Path $oldExePath -NewName $newAgentExe -Force
-    Write-Host "Renamed agent executable to '$newAgentExe'." -ForegroundColor Green
-} elseif (Test-Path $newExePath) {
-    Write-Host "Agent executable already named '$newAgentExe'." -ForegroundColor Green
-} else {
-    Write-Warning "Agent executable not found in bin directory!"
+# Rename desktop shortcut if present
+$desktopShortcut = "$env:Public\Desktop\Wazuh Agent.lnk"
+if (Test-Path $desktopShortcut) {
+    Rename-Item -Path $desktopShortcut -NewName "CyberSentinel Agent.lnk"
 }
 
-# Remove existing service if any
-if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
-    Write-Host "Stopping existing service '$serviceName'..."
-    Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
-    Write-Host "Removing existing service '$serviceName'..."
-    sc.exe delete $serviceName | Out-Null
-    Start-Sleep -Seconds 2
+# Rename the installation folder (not safe if app is running)
+$installPath = "C:\Program Files (x86)\ossec-agent"
+$customPath = "C:\Program Files (x86)\CyberSentinel"
+if (!(Test-Path $customPath)) {
+    try {
+        Move-Item -Path $installPath -Destination $customPath
+    } catch {
+        Write-Host "Could not rename folder while service is using it."
+    }
 }
 
-# Create new service
-$exePathQuoted = "`"$newExePath`""
-Write-Host "Installing service '$serviceName'..."
-sc.exe create $serviceName binPath= $exePathQuoted start= auto | Out-Null
-
-# Start the service
-Start-Service -Name $serviceName
-Write-Host "Service '$serviceName' started successfully." -ForegroundColor Green
-
-Write-Host "Deployment finished successfully!" -ForegroundColor Green
+# Step 6: Restart the agent
+Start-Service -Name "WazuhSvc"
+Write-Host "CyberSentinel Agent installed and configured."
