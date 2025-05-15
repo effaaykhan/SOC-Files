@@ -35,7 +35,7 @@ if ($agentNameNode) {
 $xml.Save($confDestination)
 
 # Step 5: Rename the Wazuh service display name to "CyberSentinel Agent"
-Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\WazuhSvc" -Name "DisplayName" -Value "CyberSentinel Agent"
+#Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\WazuhSvc" -Name "DisplayName" -Value "CyberSentinel Agent"
 
 # Step 6: Restart the Wazuh service (now will appear as "CyberSentinel Agent")
 Restart-Service -Name WazuhSvc
