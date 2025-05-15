@@ -1,59 +1,135 @@
-# -----------------------------------------
-# CyberSentinel (Wazuh) Windows Agent Installer Script
-# -----------------------------------------
-# Run this script as Administrator in PowerShell.
+# PowerShell script to install CyberSentinel (Wazuh-based) Agent on Windows
+# Requirements:
+# - Run as Administrator
+# - Ensure execution policy allows running scripts or sign this script.
 
-# 1. Set variables for download URL and manager IP
-$installerUrl = "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.11.2-1.msi"
-$managerIP = "192.168.1.69"
-$installerPath = "$env:TEMP\wazuh-agent-4.11.2-1.msi"
+# Define variables
+$wazuhManager = "192.168.1.69"  # Wazuh manager IP
+$installerUrl = "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.12.0-1.msi"  # URL to Wazuh agent installer (update if necessary)
+$customConfigUrl = "https://raw.githubusercontent.com/effaaykhan/SOC-Files/main/Wazuh/windows-agent.conf"  # URL to custom Wazuh agent config
+$logFile = Join-Path $env:TEMP "CyberSentinelInstall.log"
 
-Write-Host "Downloading CyberSentinel agent installer..."
-Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
+# Function to log messages with timestamp
+function Write-Log {
+    param([string]$message)
+    $timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    $logEntry = "${timestamp} - ${message}"
+    Write-Host $logEntry
+    Add-Content -Path $logFile -Value $logEntry
+}
 
-# 2. Install the agent silently and register with the manager
-Write-Host "Installing CyberSentinel agent (this may take a moment)..."
-$msiArgs = "/i `"$installerPath`" /qn WAZUH_MANAGER=`"$managerIP`""
-Start-Process msiexec.exe -ArgumentList $msiArgs -Wait -NoNewWindow
+# Remove existing log file if present
+if (Test-Path $logFile) {
+    Remove-Item $logFile -Force
+}
 
-# 3. Determine the installation directory (default is under Program Files)
-if (Test-Path "C:\Program Files (x86)\ossec-agent") {
-    $installPath = "C:\Program Files (x86)\ossec-agent"
-} elseif (Test-Path "C:\Program Files\ossec-agent") {
-    $installPath = "C:\Program Files\ossec-agent"
-} else {
-    Write-Error "Installation directory not found. Exiting."
+# Check for administrative privileges
+$currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) {
+    Write-Log "ERROR: Script is not running as Administrator. Exiting."
     exit 1
 }
 
-# 4. Download and replace the agent configuration file
-Write-Host "Configuring CyberSentinel agent..."
-$configUrl = "https://raw.githubusercontent.com/effaaykhan/SOC-Files/main/Wazuh/windows-agent.conf"
-$configPath = Join-Path $installPath "ossec.conf"
-# (Optional) Back up the original config:
-Copy-Item -Path $configPath -Destination "${configPath}.backup" -ErrorAction SilentlyContinue
-# Download the new configuration
-Invoke-WebRequest -Uri $configUrl -OutFile $configPath
+Write-Log "Starting CyberSentinel (Wazuh agent) installation..."
 
-# 5. Apply audit policy settings as specified
-Write-Host "Applying audit policy settings..."
-# Enable auditing for Removable Storage, Plug and Play, and File System
-auditpol /set /subcategory:"Removable Storage" /success:enable /failure:enable
-auditpol /set /subcategory:"Plug and Play Events" /success:enable /failure:enable
-auditpol /set /subcategory:"File System" /success:enable /failure:enable
-# Enable the Microsoft-Windows-DriverFrameworks-UserMode log
-wevtutil set-log "Microsoft-Windows-DriverFrameworks-UserMode/Operational" /enabled:true
-
-# 6. Rename the service display name to "CyberSentinel Agent" (hides "Wazuh" name)
-Write-Host "Renaming service to CyberSentinel Agent..."
-$service = Get-Service | Where-Object { $_.Name -like "wazuh*" }
-if ($service) {
-    $svcName = $service.Name
-    sc.exe config $svcName DisplayName= "CyberSentinel Agent"
+# Download the Wazuh agent installer
+$installerPath = Join-Path $env:TEMP "wazuh-agent.msi"
+try {
+    Write-Log "Downloading Wazuh agent installer from $installerUrl..."
+    Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath -UseBasicParsing
+    Write-Log "Downloaded Wazuh agent installer to $installerPath."
+} catch {
+    Write-Log "ERROR: Failed to download Wazuh agent installer. $_"
+    exit 1
 }
 
-# 7. Start the agent service if not already running
-Write-Host "Starting CyberSentinel agent service..."
-Start-Service -Name $service.Name
+# Install the Wazuh agent silently
+try {
+    Write-Log "Installing Wazuh agent silently..."
+    $msiArgs = "/i `"$installerPath`" /qn WAZUH_MANAGER=`"$wazuhManager`""
+    Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -Wait -NoNewWindow
+    Write-Log "Wazuh agent installation completed."
+} catch {
+    Write-Log "ERROR: Wazuh agent installation failed. $_"
+    exit 1
+}
 
-Write-Host "CyberSentinel agent installation and configuration complete."
+# Determine Wazuh agent installation directory based on architecture
+if (Test-Path "$env:ProgramFiles (x86)\ossec-agent") {
+    $installDir = "$env:ProgramFiles (x86)\ossec-agent"
+} elseif (Test-Path "$env:ProgramFiles\ossec-agent") {
+    $installDir = "$env:ProgramFiles\ossec-agent"
+} else {
+    Write-Log "ERROR: Wazuh agent installation directory not found."
+    exit 1
+}
+
+# Replace the default configuration with custom config
+$agentConfigPath = Join-Path $installDir "ossec.conf"
+if (Test-Path $agentConfigPath) {
+    # Backup original config
+    Copy-Item -Path $agentConfigPath -Destination "${agentConfigPath}.bak" -Force
+    Write-Log "Backed up original config to ${agentConfigPath}.bak"
+}
+try {
+    Write-Log "Downloading custom agent config from $customConfigUrl..."
+    Invoke-WebRequest -Uri $customConfigUrl -OutFile "$env:TEMP\windows-agent.conf" -UseBasicParsing
+    Move-Item -Path "$env:TEMP\windows-agent.conf" -Destination $agentConfigPath -Force
+    Write-Log "Replaced agent configuration with custom config."
+} catch {
+    Write-Log "ERROR: Failed to download or replace agent config. $_"
+    exit 1
+}
+
+# Apply required audit policy settings
+Write-Log "Applying audit policy settings..."
+try {
+    & auditpol /set /subcategory:"Removable Storage" /success:enable /failure:enable
+    & auditpol /set /subcategory:"Plug and Play Events" /success:enable /failure:enable
+    & auditpol /set /subcategory:"File System" /success:enable /failure:enable
+    & wevtutil set-log "Microsoft-Windows-DriverFrameworks-UserMode/Operational" /enabled:true
+    Write-Log "Audit policy settings applied successfully."
+} catch {
+    Write-Log "ERROR: Failed to apply some audit policy settings. $_"
+}
+
+# Rename the Wazuh agent service display name without creating a new service
+Write-Log "Renaming Wazuh agent service display name to 'CyberSentinel Agent'..."
+try {
+    $svc = Get-WmiObject -Class Win32_Service -Filter "Name='WazuhSvc'"
+    if ($svc) {
+        $result = $svc.Change("CyberSentinel Agent", $svc.PathName, [uint32]$svc.ServiceType, [uint32]$svc.ErrorControl, $svc.StartMode, $svc.DesktopInteract, $svc.StartName, $svc.StartPassword, $svc.LoadOrderGroup, $svc.LoadOrderGroupDependencies, $svc.ServiceDependencies)
+        if ($result.ReturnValue -eq 0) {
+            Write-Log "Service display name changed successfully."
+        } else {
+            Write-Log "WARNING: Could not change service display name. WMI return code: $($result.ReturnValue)"
+        }
+    } else {
+        Write-Log "WARNING: Wazuh service not found. Skipping display name change."
+    }
+} catch {
+    Write-Log "ERROR: Exception while renaming service display name. $_"
+}
+
+# Validate that the agent service is installed and running
+Write-Log "Validating Wazuh agent service status..."
+try {
+    $service = Get-Service -Name WazuhSvc -ErrorAction Stop
+    if ($service.Status -eq 'Running') {
+        Write-Log "Wazuh agent service is running."
+    } else {
+        Write-Log "Wazuh agent service is installed but not running. Attempting to start it..."
+        Start-Service -Name WazuhSvc
+        Start-Sleep -Seconds 5
+        if ((Get-Service -Name WazuhSvc).Status -eq 'Running') {
+            Write-Log "Wazuh agent service started successfully."
+        } else {
+            Write-Log "ERROR: Failed to start Wazuh agent service."
+        }
+    }
+} catch {
+    Write-Log "ERROR: Wazuh agent service is not installed or cannot be accessed. $_"
+}
+
+Write-Log "CyberSentinel agent installation and configuration completed."
