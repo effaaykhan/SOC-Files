@@ -150,9 +150,9 @@ If (Test-Path (Join-Path $binDir "remove-threat.exe") -and `
 }
 
 # Clean up
-Write-Host "Cleaning up temporary files..." -ForegroundColor Cyan
-Remove-Item "$env:TEMP\dist","$env:TEMP\build" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item $script1File,$script2File,$agentFile -Force -ErrorAction SilentlyContinue
+#Write-Host "Cleaning up temporary files..." -ForegroundColor Cyan
+#Remove-Item "$env:TEMP\dist","$env:TEMP\build" -Recurse -Force -ErrorAction SilentlyContinue
+#Remove-Item $script1File,$script2File,$agentFile -Force -ErrorAction SilentlyContinue
 #Write-Host "Cleanup complete. Deployment finished successfully!" -ForegroundColor Green
 
 
