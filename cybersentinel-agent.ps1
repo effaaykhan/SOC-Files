@@ -1,7 +1,7 @@
 Write-Host "Installing CyberSentinel Agent..." -ForegroundColor Cyan
 
 # Variables
-$agentUrl = "https://example.com/cybersentinel-agent.zip"   # REPLACE this with your actual agent archive URL
+$agentUrl = "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.11.2-1.msi"   # REPLACE this with your actual agent archive URL
 $tempZip = Join-Path $env:TEMP "cybersentinel-agent.zip"
 $installDir = Join-Path $PSScriptRoot "bin"
 $oldAgentExe = "agent.exe"              # original agent exe name inside the zip
