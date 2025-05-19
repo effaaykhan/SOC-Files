@@ -1,3 +1,11 @@
 key,value
-alice@192.168.1.10,true
-bob@192.168.1.15,true
+192.168.1.79_play.google.com,1
+192.168.1.85_play.google.com,1
+192.168.1.82_play.google.com,1
+192.168.1.79_chrome.cloudflare-dns.com,1
+192.168.1.87_play.google.com,1
+192.168.1.81_play.google.com,1
+192.168.1.92_play.google.com,1
+192.168.1.78_dns.google,1
+192.168.1.79_beacons.gcp.gvt2.com,1
+192.168.1.132_play.google.com,1
